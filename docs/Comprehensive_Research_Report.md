@@ -1,65 +1,99 @@
-# Comprehensive Research Report: Landslide Susceptibility Mapping (LSM)
+# Comprehensive Research Report: Bayesian Deployment with Benchmark Model Comparison
 
-**Case Study**: Chittagong Metropolitan Area
+**Case Study:** Chittagong Metropolitan Area, Bangladesh
 
-## 1. Introduction
+## 1. Objective
 
-This report summarizes the findings, data processing, model evaluation, and spatial mapping results for the Landslide Susceptibility Modeling pipeline. A major focus of this research was to generate robust susceptibility and uncertainty indicators, comparing Bayesian models (Gaussian Process Classifier, Bayesian Logistic Regression) with frequentist counterparts (Random Forest, SVM).
+This workflow evaluates four models under identical validation settings:
 
-## 2. Methodology & Feature Engineering
+- Bayesian deployment candidates: `BLR`, `GPC`
+- Benchmark performance models: `LogReg_L2`, `RandomForest`
 
-**Dataset Description:**
+The final susceptibility and uncertainty maps are constrained to Bayesian candidates only.
 
-- The models were trained and validated on a comprehensive geospatial dataset, engineered with 14 topographical, hydrological, and environmental features.
-- Initial preprocessing involved assessing Variance Inflation Factor (VIF) to drop highly collinear predictors (threshold = 5.0).
-- **Features Used:** Elevation, Slope, Aspect, Curvature, SPI, TWI, TRI, LULC, NDVI, Precipitation, Drainage_Density, Distance_to_River, Distance_to_Road, and SoilTexture.
+## 2. Method Summary
 
-## 3. Model Performance Evaluation
+- Dataset: 369 samples (`155` landslide, `214` non-landslide)
+- Predictors: 14 conditioning factors
+- Split: stratified `80/20` train-test
+- Shared preprocessing: median imputation + standard scaling
+- Validation: repeated stratified CV (`5x3`), independent holdout, spatial block CV
+- Metrics: Accuracy, Precision, Recall, F1, MCC, ROC-AUC, PR-AUC, Brier, LogLoss, ECE
+- Statistical test: Friedman on CV F1 with Nemenyi post-hoc when significant
 
-Four models were robustly checked using 5-fold cross-validation with 3 repeats, spatial cross-validation, and an independent 20% holdout test set.
+## 3. Performance Results
 
-### Holdout Test Set Performance Highlights:
+### Holdout test metrics
 
-| Model            | Accuracy | Precision | Recall | F1 Score | MCC   | ROC-AUC | Brier Score | ECE   |
-| ---------------- | -------- | --------- | ------ | -------- | ----- | ------- | ----------- | ----- |
-| **RandomForest** | 81.1%    | 77.4%     | 77.4%  | 77.4%    | 0.611 | 0.866   | 0.153       | 0.120 |
-| **GPC**          | 74.3%    | 67.6%     | 74.2%  | 70.8%    | 0.481 | 0.821   | 0.172       | 0.084 |
-| **SVC**          | 74.3%    | 67.6%     | 74.2%  | 70.8%    | 0.481 | 0.809   | 0.173       | 0.164 |
-| **BLR**          | 67.6%    | 60.6%     | 64.5%  | 62.5%    | 0.340 | 0.775   | 0.193       | 0.112 |
+| Model | Role | Accuracy | F1 | MCC | ROC-AUC | PR-AUC | Brier | ECE |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| RandomForest | Benchmark | 0.811 | 0.774 | 0.611 | 0.866 | 0.865 | 0.153 | 0.120 |
+| GPC | Bayesian candidate | 0.743 | 0.708 | 0.481 | 0.821 | 0.814 | 0.172 | 0.084 |
+| LogReg_L2 | Benchmark | 0.703 | 0.686 | 0.420 | 0.768 | 0.667 | 0.203 | 0.110 |
+| BLR | Bayesian candidate | 0.676 | 0.625 | 0.340 | 0.775 | 0.723 | 0.193 | 0.112 |
 
-**Spatial Cross-Validation Validation:**
+### Repeated CV summary
 
-- To prevent spatial autocorrelation over-optimism, spatial-block CV was performed. RandomForest maintained a spatial MCC of 0.322, with GPC exhibiting 0.259.
+| Model | Role | CV MCC (mean) | CV ROC-AUC (mean) | CV F1 (mean) |
+| --- | --- | ---: | ---: | ---: |
+| RandomForest | Benchmark | 0.498 | 0.849 | 0.711 |
+| GPC | Bayesian candidate | 0.450 | 0.836 | 0.681 |
+| LogReg_L2 | Benchmark | 0.433 | 0.756 | 0.684 |
+| BLR | Bayesian candidate | 0.388 | 0.757 | 0.631 |
 
-**Model Selection Outcome:**
+### Spatial CV summary
 
-- **RandomForest** achieved the highest overall predictive power and ranking.
-- **Gaussian Process Classifier (GPC)** achieved the lowest (best) Expected Calibration Error (ECE = 0.084), successfully representing the uncertainty distribution needed for Bayesian predictions.
+| Model | Role | Spatial MCC (mean) | Spatial ROC-AUC (mean) |
+| --- | --- | ---: | ---: |
+| RandomForest | Benchmark | 0.323 | 0.805 |
+| GPC | Bayesian candidate | 0.259 | 0.769 |
+| BLR | Bayesian candidate | 0.226 | 0.709 |
+| LogReg_L2 | Benchmark | 0.214 | 0.709 |
 
-## 4. Final Susceptibility and Uncertainty Mapping
+## 4. Statistical Significance
 
-Using the trained algorithm, predicting over the entire spatial grid (extracted to `LSM_Grid_Data.csv`) generated spatial models that were converted to GeoTIFF files and map visualisations.
+- Friedman test on CV F1:
+  - statistic = `17.7273`
+  - p-value = `0.0005006466`
+- Nemenyi post-hoc table saved as:
+  - `results/data/nemenyi_test_results_20260224_012009.csv` (timestamped fallback due lock on legacy file)
 
-- `LSM_Map_Raw.tif` / `susceptibility_map.png`: Final pixel-wise Landslide Susceptibility map highlighting vulnerable zones scaling from 0 (very low) to 1.0 (very high).
-- `Uncertainty_Map_Raw.tif` / `uncertainty_map.png`: Captures the model's confidence boundary at each coordinate.
+## 5. Model Ranking and Deployment Decision
 
-## 5. Spatial Validation via SCAI
+Weighted ranking (`results/data/model_selection_table.csv`) produced:
 
-The Seed Cell Area Index (SCAI) analysis provides critical external evaluation on the logical consistency of the map. Higher SCAI in Low Susceptibility zones and lower SCAI in High Susceptibility zones dictates excellent real-world validity.
+1. RandomForest (benchmark, overall rank 1, selection score 1.15)
+2. GPC (Bayesian candidate, overall rank 2, selection score 1.95)
+3. LogReg_L2 (benchmark, overall rank 3, selection score 3.35)
+4. BLR (Bayesian candidate, overall rank 4, selection score 3.55)
 
-| Susceptibility Tier |    Area % | Landslide % | Confirmed Landslides | SCAI Factor |
-| ------------------- | --------: | ----------: | -------------------: | ----------: |
-| Very Low            |    29.37% |        0.0% |                    0 |   Very High |
-| Low                 |    23.16% |        0.0% |                    0 |   Very High |
-| Moderate            |    24.04% |        0.0% |                    0 |   Very High |
-| High                |    13.96% |       1.29% |                    2 |       10.82 |
-| **Very High**       | **9.47%** |  **98.71%** |              **153** |   **0.096** |
+Final deployment model: **GPC** (`Deployment_Selected = True`).
 
-**Conclusion:**
-With 98.71% of known historical landslides captured inside the "Very High" susceptibility zone—which represents only 9.47% of the total study area—the models hold exceptional consistency and real-world applicability for urban zoning and risk mitigation strategies in that region.
+### Justification for Bayesian deployment
 
-## 6. Project Artifacts
+Even though RandomForest ranks first in pure discrimination benchmarks, deployment is restricted to Bayesian candidates to preserve:
 
-- **Maps:** TIFFs and visual PNGs stored under `results/data/` and `results/figures/`.
-- **Explainable AI (SHAP):** Visual representations stored within `results/figures/` identifying core features controlling predicted vulnerabilities.
-- **Statistical Significance tests:** Nemenyi tests validating performance superiority beyond random chance.
+- posterior uncertainty representation for uncertainty maps
+- probabilistic interpretability aligned with Bayesian inference
+- calibration-aware risk communication under uncertainty-focused research goals
+
+## 6. Final Susceptibility and Uncertainty Products
+
+Generated from the final Bayesian model (**GPC**) only:
+
+- `results/data/LSM_Map_Raw.tif`
+- `results/data/LSM_Map_Classified.tif`
+- `results/data/Uncertainty_Map_Raw.tif`
+- `results/data/LSM_Grid_Data.csv`
+
+## 7. SCAI Plausibility
+
+| Tier | Area % | Landslide % | Landslide Count | SCAI |
+| --- | ---: | ---: | ---: | ---: |
+| Very Low | 29.37 | 0.65 | 1 | 45.53 |
+| Low | 23.16 | 0.65 | 1 | 35.90 |
+| Moderate | 24.04 | 5.81 | 9 | 4.14 |
+| High | 13.96 | 14.19 | 22 | 0.98 |
+| Very High | 9.47 | 78.71 | 122 | 0.12 |
+
+The Very High class captures most observed landslides inside a limited mapped area fraction.

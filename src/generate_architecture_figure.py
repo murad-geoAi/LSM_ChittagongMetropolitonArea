@@ -1,4 +1,4 @@
-"""
+﻿"""
 Generate a publication-grade model architecture infographic using matplotlib.
 Output: results/figures/model_architecture.png (300 DPI, high-resolution)
         results/figures/model_architecture.pdf (vector format)
@@ -16,9 +16,9 @@ from matplotlib.patches import FancyBboxPatch, FancyArrowPatch
 import numpy as np
 import os
 
-# ──────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 #  Configuration & Color Palette
-# ──────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 plt.rcParams.update(
     {
         "font.family": "sans-serif",
@@ -139,9 +139,9 @@ def icon_circle(ax, cx, cy, r, bg_color, text, text_color="white", fontsize=8):
     )
 
 
-# ──────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 #  Create Figure
-# ──────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 fig, ax = plt.subplots(1, 1, figsize=(10.5, 14.8))
 ax.set_xlim(0, 10.5)
 ax.set_ylim(0, 14.8)
@@ -153,9 +153,9 @@ LM = 0.3
 W = 9.9
 CX = LM + W / 2
 
-# ──────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 #  Title
-# ──────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 ax.text(
     CX,
     14.5,
@@ -170,7 +170,7 @@ ax.text(
     CX,
     14.18,
     "Proposed Bayesian Machine Learning Framework for\n"
-    "Landslide Susceptibility Mapping (LSM) — Chittagong Metropolitan Area",
+    "Landslide Susceptibility Mapping (LSM) â€” Chittagong Metropolitan Area",
     fontsize=9,
     fontweight="normal",
     color=C["text_dark"],
@@ -179,9 +179,9 @@ ax.text(
     linespacing=1.4,
 )
 
-# ═══════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 #  STAGE 1: Data Input
-# ═══════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 s1_y = 12.65
 s1_h = 1.2
 draw_box(ax, LM, s1_y, W, s1_h, C["s1_bg"], C["s1_bd"])
@@ -282,9 +282,9 @@ ax.text(
 
 draw_arrow(ax, CX, s1_y - 0.02, s1_y - 0.3)
 
-# ═══════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 #  STAGE 2: Preprocessing
-# ═══════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 s2_y = 11.1
 s2_h = 1.22
 draw_box(ax, LM, s2_y, W, s2_h, C["s2_bg"], C["s2_bd"])
@@ -370,9 +370,9 @@ for i, (letter, name, detail) in enumerate(prep_items):
 
 draw_arrow(ax, CX, s2_y - 0.02, s2_y - 0.3)
 
-# ═══════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 #  STAGE 3: Models
-# ═══════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 s3_y = 8.3
 s3_h = 2.48
 draw_box(ax, LM, s3_y, W, s3_h, C["s3_bg"], C["s3_bd"])
@@ -380,7 +380,7 @@ draw_badge(ax, LM + 0.12, s3_y + s3_h - 0.16, "STAGE 3", C["s3_badge"])
 ax.text(
     LM + 0.92,
     s3_y + s3_h - 0.16,
-    "Bayesian & Baseline Model Comparison",
+    "Bayesian Deployment + Benchmark Models",
     fontsize=9,
     fontweight="bold",
     color=C["text_dark"],
@@ -391,7 +391,7 @@ ax.text(
 ax.text(
     CX,
     s3_y + s3_h - 0.45,
-    "Each model wrapped in:  Pipeline  →  Imputer  →  Scaler  →  Classifier",
+    "Each model wrapped in:  Pipeline  â†’  Imputer  â†’  Scaler  â†’  Classifier",
     fontsize=6.5,
     color=C["text_light"],
     ha="center",
@@ -425,16 +425,30 @@ model_cards = [
         "bd": C["gpc_bd"],
         "acc": C["gpc_acc"],
         "details": [
-            "Matérn (ν = 3/2) Kernel",
+            "Matern (nu = 3/2) Kernel",
             "+ White Kernel",
             "n_restarts = 5",
             "Full Bayesian Inference",
         ],
     },
     {
+        "abbr": "LR-L2",
+        "name": "L2-Regularized\nLogistic Regression",
+        "type": "BENCHMARK",
+        "bg": C["svc_bg"],
+        "bd": C["svc_bd"],
+        "acc": C["svc_acc"],
+        "details": [
+            "Penalty = L2 (C = 1.0)",
+            "Class Weight = balanced",
+            "Solver = lbfgs",
+            "max_iter = 3000",
+        ],
+    },
+    {
         "abbr": "RF",
         "name": "Random\nForest",
-        "type": "BASELINE",
+        "type": "BENCHMARK",
         "bg": C["rf_bg"],
         "bd": C["rf_bd"],
         "acc": C["rf_acc"],
@@ -442,28 +456,14 @@ model_cards = [
             "n_estimators = 300",
             "min_samples_leaf = 2",
             "balanced_subsample",
-            "Parallel (n_jobs = −1)",
-        ],
-    },
-    {
-        "abbr": "SVC",
-        "name": "Support Vector\nClassifier",
-        "type": "BASELINE",
-        "bg": C["svc_bg"],
-        "bd": C["svc_bd"],
-        "acc": C["svc_acc"],
-        "details": [
-            "RBF Kernel",
-            "C = 2.0, γ = scale",
-            "Balanced class weights",
-            "probability = True",
+            "n_jobs = -1",
         ],
     },
 ]
 
 mc_w = 2.18
 mc_gap = 0.2
-mc_start_x = LM + (W - 4 * mc_w - 3 * mc_gap) / 2
+mc_start_x = LM + (W - len(model_cards) * mc_w - (len(model_cards) - 1) * mc_gap) / 2
 mc_y = s3_y + 0.1
 mc_h = 1.68
 
@@ -540,9 +540,9 @@ for i, mc in enumerate(model_cards):
 
 draw_arrow(ax, CX, s3_y - 0.02, s3_y - 0.3)
 
-# ═══════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 #  STAGE 4: Validation
-# ═══════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 s4_y = 5.78
 s4_h = 2.2
 draw_box(ax, LM, s4_y, W, s4_h, C["s4_bg"], C["s4_bd"])
@@ -558,7 +558,7 @@ ax.text(
 )
 
 val_items = [
-    ("i", "Repeated Stratified\nK-Fold CV", "5 folds × 3 repeats"),
+    ("i", "Repeated Stratified\nK-Fold CV", "5 folds Ã— 3 repeats"),
     ("ii", "Spatial Block\nCross-Validation", "KMeans grouping"),
     ("iii", "Independent\nHoldout Test", "20% test split"),
     ("iv", "Bootstrap\nConfidence Intervals", "1,200 iterations"),
@@ -658,9 +658,9 @@ for m in metrics:
 
 draw_arrow(ax, CX, s4_y - 0.02, s4_y - 0.3)
 
-# ═══════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 #  STAGE 5: Model Selection
-# ═══════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 s5_y = 4.38
 s5_h = 1.08
 draw_box(ax, LM, s5_y, W, s5_h, C["s5_bg"], C["s5_bd"])
@@ -755,9 +755,9 @@ for i, (weight, metric) in enumerate(terms):
 
 draw_arrow(ax, CX, s5_y - 0.02, s5_y - 0.3)
 
-# ═══════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 #  STAGE 6: Outputs
-# ═══════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 s6_y = 2.78
 s6_h = 1.28
 draw_box(ax, LM, s6_y, W, s6_h, C["s6_bg"], C["s6_bd"])
@@ -789,7 +789,7 @@ outputs = [
         "V",
         "#b45309",
         "SCAI & Statistical\nValidation",
-        "Friedman + Nemenyi\npost-hoc tests",
+        "Friedman/Nemenyi +\nBayesian deployment rule",
     ),
 ]
 ow = 3.0
@@ -831,7 +831,7 @@ ax.text(
     CX,
     2.4,
     "Proposed methodological framework for Bayesian landslide susceptibility mapping.\n"
-    "All models trained via scikit-learn Pipeline with standardized preprocessing.",
+    "All models share identical preprocessing; only Bayesian candidates are eligible for final deployment maps.",
     fontsize=6.2,
     color=C["text_light"],
     ha="center",
@@ -840,9 +840,9 @@ ax.text(
     linespacing=1.35,
 )
 
-# ──────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 #  Save
-# ──────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 out_dir = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "results", "figures"
 )
@@ -867,3 +867,4 @@ plt.close()
 print(
     "\nPublication-grade model architecture figure generated in PNG (300 DPI), PDF, and SVG."
 )
+

@@ -1,111 +1,78 @@
-# Landslide Susceptibility Mapping (Bayesian LSM Pipeline)
+# Bayesian LSM Pipeline with Benchmark Comparison
 
-Welcome to the project repository for the Q1 Journal-grade Bayesian Landslide Susceptibility Modeling (LSM) pipeline. This repository has been restructured to facilitate reproducibility, isolated virtual environments, and modularity.
+This repository runs a landslide susceptibility workflow that compares Bayesian and deterministic models under the same validation protocol, while restricting final map deployment to Bayesian models.
 
-## Repository Structure Overview
+## Model Policy
 
-```text
-LSM_ChittagongMetropolitonArea/
-│
-├── data/                    # Contains Raw and Processed Datasets
-│   └── Landslide_Data.csv   # The primary structured dataset
-│
-├── src/                     # Source codes and notebooks
-│   └── (Your Scripts Here)  # Place all execution pipelines or model architecture scripts here (e.g., bayesian_lsm_pipeline.py)
-│
-├── results/                 # Automated output files and pipeline artifacts
-│   ├── figures/             # Q1 Journal ready visualizations (.png, .jpg)
-│   └── data/                # Processed outputs, geospatial raster/grids (.tif, .csv)
-│
-├── docs/                    # Related project documentation and write-ups
-│   └── DEMO_RESEARCH_PAPER.md
-│
-├── requirements.txt         # Dependency file for python isolated environment
-└── README.md                # This user guide
+- **Bayesian deployment candidates:** `BLR`, `GPC`
+- **Benchmark performance models:** `LogReg_L2`, `RandomForest`
+- All four models use the same preprocessing pipeline:
+  - median imputation
+  - standard scaling
+  - classifier
+- Final susceptibility and uncertainty maps are generated **only** from the best Bayesian model under the weighted selection criteria.
+
+## Validation Framework
+
+The workflow applies identical validation to all models:
+
+1. repeated stratified CV (`5` folds x `3` repeats)
+2. independent holdout testing (`20%`)
+3. spatial block CV (`GroupKFold` with KMeans-derived blocks)
+4. full metrics: Accuracy, Precision, Recall, F1, MCC, ROC-AUC, PR-AUC, Brier, LogLoss, ECE
+
+Statistical model-comparison test:
+
+- `Friedman` test, and `Nemenyi` post-hoc when significant.
+
+## Run
+
+```bash
+cd "h:\Baysesian Machine Learning-LSM\LSM_ChittagongMetropolitonArea"
+python __pycache__/bayesian_lsm_pipeline.py
+python src/generate_maps.py
+python src/generate_architecture_figure.py
 ```
 
----
+## Key Outputs
 
-## 🛠️ Environment Setup
+### Metrics and rankings (`results/data/`)
 
-To ensure strict reproducibility and avoid package conflicts with your other software, you must create an isolated virtual environment containing all required libraries.
+- `cv_metrics_summary.csv`
+- `spatial_cv_metrics.csv`
+- `holdout_metrics.csv`
+- `holdout_bootstrap_ci.csv`
+- `holdout_calibration_summary.csv`
+- `model_selection_table.csv`
+- `friedman_test.txt`
+- `nemenyi_test_results_*.csv` (fallback timestamped file if lock prevents overwrite)
+- `model_report.json`
 
-1. **Navigate to the Project Directory**:
+### Figures (`results/figures/`)
 
-   ```bash
-   cd "h:\Baysesian Machine Learning-LSM\LSM_ChittagongMetropolitonArea"
-   ```
+- `roc_curve.png`
+- `pr_curve.png`
+- `calibration_curve_holdout.png`
+- `confusion_matrix_blr.png`
+- `confusion_matrix_gpc.png`
+- `confusion_matrix_logreg_l2.png`
+- `confusion_matrix_randomforest.png`
+- `shap_summary.png`
+- `model_architecture.png`
+- `susceptibility_map.png`
+- `uncertainty_map.png`
 
-2. **Create a Virtual Environment**:
+### Spatial products (`results/data/`)
 
-   ```bash
-   python -m venv lsm_env
-   ```
+- `LSM_Map_Raw.tif`
+- `LSM_Map_Classified.tif`
+- `Uncertainty_Map_Raw.tif`
+- `LSM_Grid_Data.csv`
+- `SCAI_Analysis.csv`
 
-3. **Activate the Environment**:
-   - On Windows:
-     ```bash
-     .\lsm_env\Scripts\activate
-     ```
+## Selection Interpretation
 
-4. **Install the Dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
----
-
-## 📊 Figure & Asset Guide for Q1 Journal Tasks
-
-Using the outputs found in `results/`, here is a guide linking the exact figures to the relevant sections of your research paper:
-
-### 1. Feature Engineering & Multicollinearity Checking
-
-**Objective**: Demonstrate that continuous features do not severely intercorrelate or bias the algorithms.
-
-- `results/figures/correlation_before.png`: Pearson correlation heatmap before Variance Inflation Factor (VIF) selection.
-- `results/figures/correlation_after.png`: Purified heatmap after excluding highly collinear variables.
-- `results/data/vif_selected_features.csv`: VIF score tabular report for the methodology section.
-
-### 2. Model Performance Evaluation
-
-**Objective**: Show that the Bayesian implementation (e.g., Gaussian Process Classifier or Bayesian Logistic Regression) reliably detects landslides globally and spatially.
-
-- `results/figures/roc_curve.png`: Test dataset ROC curves demonstrating Sensitivity vs Specificity.
-- `results/figures/pr_curve.png`: Precision-Recall evaluating class imbalance robustness.
-- `results/figures/calibration_curve_holdout.png`: Brier score reliability mapping demonstrating the Bayesian method’s uncertainty precision versus baselines.
-- `results/figures/confusion_matrix_gpc.png`: Matrix showing True/False predictions.
-- `results/data/cv_metrics_summary.csv` & `spatial_cv_metrics.csv`: Aggregate statistics (Accuracy, Precision, Recall, F1, MCC, Spatial MCC).
-
-### 3. Explainable AI (XAI) and Interpretability
-
-**Objective**: Analyze what physical features contribute most drastically to landslides globally and locally.
-
-- `results/figures/shap_summary.png`: SHAP bee-swarm plot showing total feature impact and directionality (e.g., how high rainfall scales susceptibility).
-- `results/figures/shap_dependence_top_[1-3]_[Feature].png`: Interaction dependencies highlighting non-linear relationships.
-
-### 4. Advanced Statistical Validation
-
-**Objective**: Prove rigorous statistical significance ensuring model superiority isn't due to random chance.
-
-- `results/data/friedman_test.txt`: The general score verifying performance variation across 5 models.
-- `results/data/nemenyi_test_results.csv`: Pairwise p-value matrices (insert this table to prove statistical advantage).
-- `results/data/holdout_bootstrap_ci.csv`: 95% Confidence Interval (CI) limits on model metrics.
-
-### 5. Final Geospatial Output
-
-**Objective**: Visualize spatial zones of vulnerability and report logical hazard consistency using SCAI.
-
-- `results/data/LSM_Grid_Data.csv`: Pixel-by-pixel spatial coordinates (Lat/Lon) matched with `Susceptibility` and `Uncertainty` arrays. Use this to explicitly generate maps manually in **ArcGIS Pro** or QGIS as requested.
-- `results/data/LSM_Map_Raw.tif` & `Uncertainty_Map_Raw.tif`: Ready-made geographical TIFFs.
-- `results/data/SCAI_Analysis.csv`: Proof that actual landslide points fall correctly into ‘Very High`susceptibility zones rather than`Low` zones.
-
----
-
-## 🚀 Execution Guide
-
-If you write new iterations of the pipeline:
-
-1. Store datasets exclusively in `data/`.
-2. Construct pipelines inside `src/`.
-3. Assure your Python script directs logging and graph exports strictly to `results/data/` or `results/figures/`.
+- `model_selection_table.csv` includes both benchmark and Bayesian models.
+- `Deployment_Eligible` marks Bayesian candidates only.
+- `Deployment_Selected` marks the final deployed Bayesian model.
+- If a benchmark model ranks higher overall, deployment still remains Bayesian by design to preserve posterior uncertainty representation and uncertainty-aware interpretation.

@@ -1,3 +1,4 @@
+import glob
 import json
 import os
 import random
@@ -14,10 +15,10 @@ import seaborn as sns
 import shap
 from rasterio.mask import mask
 from rasterio.transform import from_origin
-from scipy.interpolate import griddata
+from scipy.interpolate import PchipInterpolator, griddata
 from scipy.optimize import minimize
 from scipy.special import expit
-from scipy.stats import friedmanchisquare
+from scipy.stats import friedmanchisquare, wilcoxon
 from shapely.geometry import mapping
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.calibration import calibration_curve
@@ -26,6 +27,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.gaussian_process import GaussianProcessClassifier
 from sklearn.gaussian_process.kernels import Matern, WhiteKernel
 from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     accuracy_score,
     auc,
@@ -48,13 +50,14 @@ from sklearn.model_selection import (
 )
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
-from sklearn.svm import SVC
 from statsmodels.stats.outliers_influence import variance_inflation_factor
 
 warnings.filterwarnings("ignore")
 
 # Paths and reproducibility
-OUTPUT_DIR = "results"
+RESULTS_DIR = "results"
+DATA_OUTPUT_DIR = os.path.join(RESULTS_DIR, "data")
+FIG_OUTPUT_DIR = os.path.join(RESULTS_DIR, "figures")
 DATA_FILE = "Landslide_Data.csv"
 SHAPEFILE = None
 RANDOM_SEED = 42
@@ -71,6 +74,9 @@ CV_SPLITS = 5
 CV_REPEATS = 3
 NUM_CLASSES = 5
 HOLDOUT_BOOTSTRAP_ITER = 1200
+BAYESIAN_MODEL_NAMES = ("BLR", "GPC")
+BENCHMARK_MODEL_NAMES = ("LogReg_L2", "RandomForest")
+INCLUDE_BENCHMARK_MODELS = True
 
 
 class BayesianLogisticRegression(BaseEstimator, ClassifierMixin):
@@ -196,8 +202,52 @@ def set_seed(seed=RANDOM_SEED):
     random.seed(seed)
 
 
-def ensure_output_dir(path=OUTPUT_DIR):
-    os.makedirs(path, exist_ok=True)
+def ensure_output_dir():
+    os.makedirs(DATA_OUTPUT_DIR, exist_ok=True)
+    os.makedirs(FIG_OUTPUT_DIR, exist_ok=True)
+
+
+def data_output_path(*parts):
+    return os.path.join(DATA_OUTPUT_DIR, *parts)
+
+
+def figure_output_path(*parts):
+    return os.path.join(FIG_OUTPUT_DIR, *parts)
+
+
+def safe_remove_file(path):
+    if not os.path.exists(path):
+        return
+    try:
+        os.remove(path)
+    except OSError as exc:
+        print(f"Warning: Could not remove stale file '{path}': {exc}")
+
+
+def resolve_data_file(filepath):
+    candidates = [
+        filepath,
+        os.path.join(os.getcwd(), filepath),
+        os.path.join(os.path.dirname(__file__), filepath),
+        os.path.join(os.path.dirname(__file__), "..", filepath),
+        os.path.join(os.path.dirname(__file__), "..", "..", filepath),
+    ]
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return os.path.abspath(candidate)
+    raise FileNotFoundError(
+        f"Could not find input dataset '{filepath}'. Checked: {candidates}"
+    )
+
+
+def is_bayesian_model(model_name):
+    return model_name in BAYESIAN_MODEL_NAMES
+
+
+def get_model_role(model_name):
+    if is_bayesian_model(model_name):
+        return "Bayesian Deployment Candidate"
+    return "Benchmark Performance Model"
 
 
 def load_dataset(filepath):
@@ -234,16 +284,6 @@ def load_dataset(filepath):
     return df, X, y, coords, features
 
 
-def save_correlation_plot(df_features, title, output_filename):
-    corr = df_features.corr(numeric_only=True)
-    plt.figure(figsize=(12, 10))
-    sns.heatmap(corr, annot=True, cmap="coolwarm", fmt=".2f", annot_kws={"size": 8})
-    plt.title(title)
-    plt.tight_layout()
-    plt.savefig(os.path.join(OUTPUT_DIR, output_filename), dpi=300)
-    plt.close()
-
-
 def calculate_vif(X):
     vif_values = []
     for i in range(X.shape[1]):
@@ -258,6 +298,75 @@ def calculate_vif(X):
         np.isfinite(vif_df["VIF"]) & (vif_df["VIF"] > 0), 1.0 / vif_df["VIF"], 0.0
     )
     return vif_df
+
+
+def plot_vif_tolerance_curve(vif_df, threshold=VIF_THRESHOLD):
+    if vif_df.empty:
+        return
+
+    plot_df = (
+        vif_df.copy()
+        .sort_values("VIF", ascending=False)
+        .reset_index(drop=True)
+    )
+    x = np.arange(len(plot_df))
+
+    fig, ax1 = plt.subplots(figsize=(12, 6.5))
+    vif_color = "#d55e00"
+    tol_color = "#0072b2"
+
+    ax1.plot(
+        x,
+        plot_df["VIF"].to_numpy(dtype=float),
+        color=vif_color,
+        marker="o",
+        linewidth=2.0,
+        label="VIF",
+    )
+    ax1.axhline(
+        threshold,
+        color=vif_color,
+        linestyle="--",
+        linewidth=1.2,
+        label=f"VIF threshold ({threshold:g})",
+    )
+    ax1.set_ylabel("Variance Inflation Factor (VIF)", color=vif_color)
+    ax1.tick_params(axis="y", labelcolor=vif_color)
+    ax1.set_ylim(bottom=0.0)
+
+    ax2 = ax1.twinx()
+    ax2.plot(
+        x,
+        plot_df["TOL"].to_numpy(dtype=float),
+        color=tol_color,
+        marker="s",
+        linewidth=2.0,
+        label="Tolerance (1/VIF)",
+    )
+    tol_threshold = 1.0 / threshold if threshold > 0 else 0.0
+    ax2.axhline(
+        tol_threshold,
+        color=tol_color,
+        linestyle="--",
+        linewidth=1.2,
+        label=f"Tolerance threshold ({tol_threshold:.2f})",
+    )
+    ax2.set_ylabel("Tolerance", color=tol_color)
+    ax2.tick_params(axis="y", labelcolor=tol_color)
+    ax2.set_ylim(0.0, 1.05)
+
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(plot_df["Feature"], rotation=45, ha="right")
+    ax1.set_xlabel("Conditioning Factors")
+    ax1.set_title("Multicollinearity Profile: VIF and Tolerance by Predictor")
+
+    handles1, labels1 = ax1.get_legend_handles_labels()
+    handles2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(handles1 + handles2, labels1 + labels2, loc="upper right")
+
+    fig.tight_layout()
+    fig.savefig(figure_output_path("vif_tolerance_curve.png"), dpi=300)
+    plt.close(fig)
 
 
 def select_features_vif(X_train, threshold=VIF_THRESHOLD):
@@ -308,8 +417,8 @@ def select_features_vif(X_train, threshold=VIF_THRESHOLD):
     return selected, dropped, final_vif
 
 
-def build_model_builders(seed=RANDOM_SEED):
-    return {
+def build_model_builders(seed=RANDOM_SEED, include_benchmarks=INCLUDE_BENCHMARK_MODELS):
+    builders = {
         "BLR": lambda: BayesianLogisticRegression(
             prior_precision=1.5,
             max_iter=500,
@@ -324,6 +433,14 @@ def build_model_builders(seed=RANDOM_SEED):
             n_restarts_optimizer=5,
             random_state=seed,
         ),
+        "LogReg_L2": lambda: LogisticRegression(
+            penalty="l2",
+            C=1.0,
+            solver="lbfgs",
+            max_iter=3000,
+            class_weight="balanced",
+            random_state=seed,
+        ),
         "RandomForest": lambda: RandomForestClassifier(
             n_estimators=300,
             min_samples_leaf=2,
@@ -331,15 +448,18 @@ def build_model_builders(seed=RANDOM_SEED):
             n_jobs=-1,
             random_state=seed,
         ),
-        "SVC": lambda: SVC(
-            C=2.0,
-            kernel="rbf",
-            gamma="scale",
-            class_weight="balanced",
-            probability=True,
-            random_state=seed,
-        ),
     }
+    if not include_benchmarks:
+        return {name: builders[name] for name in BAYESIAN_MODEL_NAMES}
+    return builders
+
+
+def cleanup_model_artifacts(active_model_names):
+    active = set(active_model_names)
+    known = set(BAYESIAN_MODEL_NAMES) | set(BENCHMARK_MODEL_NAMES) | {"SVC"}
+    for name in known.difference(active):
+        cm_path = figure_output_path(f"confusion_matrix_{name.lower()}.png")
+        safe_remove_file(cm_path)
 
 
 def build_pipeline(estimator):
@@ -485,7 +605,7 @@ def summarize_cv_metrics(metrics_log):
     ]
 
     for name, log in metrics_log.items():
-        row = {"Model": name}
+        row = {"Model": name, "Model_Role": get_model_role(name)}
         for metric in metric_keys:
             values = np.asarray(log[metric], dtype=float)
             n = np.sum(~np.isnan(values))
@@ -502,91 +622,159 @@ def summarize_cv_metrics(metrics_log):
         .sort_values("mcc_mean", ascending=False)
         .reset_index(drop=True)
     )
-    summary_df.to_csv(os.path.join(OUTPUT_DIR, "cv_metrics_summary.csv"), index=False)
+    summary_df.to_csv(data_output_path("cv_metrics_summary.csv"), index=False)
     return summary_df
 
 
-def evaluate_and_visualize_cv(metrics_log, best_baseline_name):
-    colors = {"BLR": "#f28e2b", "GPC": "blue", "RandomForest": "green", "SVC": "red"}
+def plot_holdout_discrimination_curves(fitted_models, X_test, y_test):
+    colors = {
+        "BLR": "#f28e2b",
+        "GPC": "#4e79a7",
+        "LogReg_L2": "#76b7b2",
+        "RandomForest": "#59a14f",
+    }
 
-    # ROC curves from out-of-fold predictions.
+    # ROC curves from independent holdout predictions.
     plt.figure(figsize=(10, 8))
-    for name, log in metrics_log.items():
-        all_y = np.concatenate(log["fold_y"])
-        all_probs = np.concatenate(log["fold_probs"])
-        fpr, tpr, _ = roc_curve(all_y, all_probs)
-        roc_auc = auc(fpr, tpr)
+    for name, model in fitted_models.items():
+        probs = np.clip(model.predict_proba(X_test)[:, 1], 1e-9, 1.0 - 1e-9)
+        fpr, tpr, _ = roc_curve(y_test, probs)
+        roc_auc = safe_roc_auc(y_test, probs)
         plt.plot(
             fpr,
             tpr,
             color=colors.get(name, "black"),
+            linewidth=2.0,
             label=f"{name} (AUC = {roc_auc:.3f})",
         )
 
     plt.plot([0, 1], [0, 1], "k--")
     plt.xlabel("False Positive Rate")
     plt.ylabel("True Positive Rate")
-    plt.title("ROC Curve (Out-of-Fold, Train CV)")
+    plt.title("ROC Curve (Holdout Test Set)")
     plt.legend(loc="lower right")
     plt.tight_layout()
-    plt.savefig(os.path.join(OUTPUT_DIR, "roc_curve.png"), dpi=300)
+    plt.savefig(figure_output_path("roc_curve.png"), dpi=300)
     plt.close()
 
-    # PR curves from out-of-fold predictions.
+    # Precision-recall curves from independent holdout predictions.
     plt.figure(figsize=(10, 8))
-    for name, log in metrics_log.items():
-        all_y = np.concatenate(log["fold_y"])
-        all_probs = np.concatenate(log["fold_probs"])
-        precision, recall, _ = precision_recall_curve(all_y, all_probs)
-        pr_auc = auc(recall, precision)
+    for name, model in fitted_models.items():
+        probs = np.clip(model.predict_proba(X_test)[:, 1], 1e-9, 1.0 - 1e-9)
+        precision, recall, _ = precision_recall_curve(y_test, probs)
+        pr_auc = safe_pr_auc(y_test, probs)
         plt.plot(
             recall,
             precision,
             color=colors.get(name, "black"),
+            linewidth=2.0,
             label=f"{name} (AUC = {pr_auc:.3f})",
         )
 
     plt.xlabel("Recall")
     plt.ylabel("Precision")
-    plt.title("Precision-Recall Curve (Out-of-Fold, Train CV)")
+    plt.title("Precision-Recall Curve (Holdout Test Set)")
     plt.legend(loc="lower left")
     plt.tight_layout()
-    plt.savefig(os.path.join(OUTPUT_DIR, "pr_curve.png"), dpi=300)
+    plt.savefig(figure_output_path("pr_curve.png"), dpi=300)
     plt.close()
 
-    # Confusion matrices from out-of-fold predictions.
-    for name in ["GPC", best_baseline_name]:
-        all_y = np.concatenate(metrics_log[name]["fold_y"])
-        all_preds = np.concatenate(metrics_log[name]["fold_preds"])
-        cm = confusion_matrix(all_y, all_preds)
+
+def plot_holdout_confusion_matrices(fitted_models, X_test, y_test):
+    for name, model in fitted_models.items():
+        preds = model.predict(X_test)
+        cm = confusion_matrix(y_test, preds)
         plt.figure(figsize=(6, 5))
         sns.heatmap(cm, annot=True, fmt="d", cmap="Blues")
-        plt.title(f"{name} Confusion Matrix (Out-of-Fold, Train CV)")
+        plt.title(f"{name} Confusion Matrix (Holdout Test Set)")
         plt.xlabel("Predicted")
         plt.ylabel("Actual")
         plt.tight_layout()
-        plt.savefig(
-            os.path.join(OUTPUT_DIR, f"confusion_matrix_{name.lower()}.png"), dpi=300
-        )
+        plt.savefig(figure_output_path(f"confusion_matrix_{name.lower()}.png"), dpi=300)
         plt.close()
+
+
+def smooth_calibration_points(mean_pred, frac_pos, n_points=300):
+    mean_pred = np.asarray(mean_pred, dtype=float)
+    frac_pos = np.asarray(frac_pos, dtype=float)
+
+    valid = np.isfinite(mean_pred) & np.isfinite(frac_pos)
+    mean_pred = mean_pred[valid]
+    frac_pos = frac_pos[valid]
+    if len(mean_pred) < 2:
+        return mean_pred, frac_pos
+
+    curve_df = (
+        pd.DataFrame({"x": mean_pred, "y": frac_pos})
+        .groupby("x", as_index=False)["y"]
+        .mean()
+        .sort_values("x")
+    )
+    x = curve_df["x"].to_numpy(dtype=float)
+    y = curve_df["y"].to_numpy(dtype=float)
+
+    if len(x) < 2:
+        return x, y
+
+    x_smooth = np.linspace(x.min(), x.max(), n_points)
+    if len(x) >= 3:
+        try:
+            y_smooth = PchipInterpolator(x, y, extrapolate=False)(x_smooth)
+        except Exception:
+            y_smooth = np.interp(x_smooth, x, y)
+    else:
+        y_smooth = np.interp(x_smooth, x, y)
+
+    return x_smooth, np.clip(y_smooth, 0.0, 1.0)
 
 
 def statistical_validation(metrics_log, metric_name="f1"):
     models = list(metrics_log.keys())
+    if len(models) < 2:
+        print("Skipping statistical test: fewer than two models.")
+        return
+
     score_lists = [np.asarray(metrics_log[m][metric_name], dtype=float) for m in models]
     min_len = min(len(s) for s in score_lists)
 
     if min_len < 3:
-        print("Skipping Friedman test: not enough folds.")
+        print("Skipping statistical test: not enough folds.")
         return
 
     trimmed_scores = [s[:min_len] for s in score_lists]
+    stats_path = data_output_path("friedman_test.txt")
+    nemenyi_path = data_output_path("nemenyi_test_results.csv")
+
+    if len(models) == 2:
+        try:
+            stat, p_value = wilcoxon(
+                trimmed_scores[0], trimmed_scores[1], zero_method="wilcox"
+            )
+        except ValueError:
+            stat, p_value = np.nan, np.nan
+
+        print("\n--- Wilcoxon Signed-Rank Test ---")
+        print(
+            f"Metric: {metric_name} | Models: {models[0]} vs {models[1]} "
+            f"| Statistic: {stat:.4f}, p-value: {p_value:.4e}"
+        )
+        with open(stats_path, "w", encoding="utf-8") as f:
+            f.write(f"test=wilcoxon_signed_rank\n")
+            f.write(f"metric={metric_name}\n")
+            f.write(f"model_a={models[0]}\n")
+            f.write(f"model_b={models[1]}\n")
+            f.write(f"statistic={stat:.6f}\n")
+            f.write(f"p_value={p_value:.10f}\n")
+
+        safe_remove_file(nemenyi_path)
+        return
+
     stat, p_value = friedmanchisquare(*trimmed_scores)
     print("\n--- Friedman Test ---")
     print(f"Metric: {metric_name} | Statistic: {stat:.4f}, p-value: {p_value:.4e}")
 
-    stats_path = os.path.join(OUTPUT_DIR, "friedman_test.txt")
     with open(stats_path, "w", encoding="utf-8") as f:
+        f.write("test=friedman\n")
         f.write(f"metric={metric_name}\n")
         f.write(f"statistic={stat:.6f}\n")
         f.write(f"p_value={p_value:.10f}\n")
@@ -596,10 +784,21 @@ def statistical_validation(metrics_log, metric_name="f1"):
         nemenyi_df = sp.posthoc_nemenyi_friedman(data)
         nemenyi_df.columns = models
         nemenyi_df.index = models
-        nemenyi_df.to_csv(os.path.join(OUTPUT_DIR, "nemenyi_test_results.csv"))
-        print("Significant difference found. Nemenyi post-hoc results saved.")
+        try:
+            nemenyi_df.to_csv(nemenyi_path)
+            print("Significant difference found. Nemenyi post-hoc results saved.")
+        except PermissionError:
+            fallback = data_output_path(
+                f"nemenyi_test_results_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            )
+            nemenyi_df.to_csv(fallback)
+            print(
+                "Significant difference found. Could not overwrite locked "
+                f"file; saved Nemenyi results to {fallback}."
+            )
     else:
         print("No statistically significant difference among models at alpha=0.05.")
+        safe_remove_file(nemenyi_path)
 
 
 def evaluate_holdout(model_builders, X_train, y_train, X_test, y_test):
@@ -617,6 +816,7 @@ def evaluate_holdout(model_builders, X_train, y_train, X_test, y_test):
         rows.append(
             {
                 "Model": name,
+                "Model_Role": get_model_role(name),
                 "Accuracy": metrics["acc"],
                 "Precision": metrics["prec"],
                 "Recall": metrics["rec"],
@@ -634,12 +834,19 @@ def evaluate_holdout(model_builders, X_train, y_train, X_test, y_test):
     holdout_df = (
         pd.DataFrame(rows).sort_values("MCC", ascending=False).reset_index(drop=True)
     )
-    holdout_df.to_csv(os.path.join(OUTPUT_DIR, "holdout_metrics.csv"), index=False)
+    holdout_df.to_csv(data_output_path("holdout_metrics.csv"), index=False)
     print(holdout_df.to_string(index=False))
     return fitted_models, holdout_df
 
 
 def plot_holdout_calibration(fitted_models, X_test, y_test):
+    colors = {
+        "BLR": "#f28e2b",
+        "GPC": "#4e79a7",
+        "LogReg_L2": "#76b7b2",
+        "RandomForest": "#59a14f",
+    }
+
     plt.figure(figsize=(8, 7))
     plt.plot([0, 1], [0, 1], "k--", label="Perfect calibration")
 
@@ -647,44 +854,92 @@ def plot_holdout_calibration(fitted_models, X_test, y_test):
     for name, model in fitted_models.items():
         probs = np.clip(model.predict_proba(X_test)[:, 1], 1e-9, 1.0 - 1e-9)
         frac_pos, mean_pred = calibration_curve(
-            y_test, probs, n_bins=10, strategy="quantile"
+            y_test, probs, n_bins=8, strategy="quantile"
         )
-        plt.plot(mean_pred, frac_pos, marker="o", linewidth=1.5, label=name)
-        rows.append({"Model": name, "ECE": expected_calibration_error(y_test, probs)})
+        x_smooth, y_smooth = smooth_calibration_points(mean_pred, frac_pos)
+        color = colors.get(name, "black")
+        if len(x_smooth) >= 2:
+            plt.plot(x_smooth, y_smooth, color=color, linewidth=2.0, label=name)
+        else:
+            plt.plot(mean_pred, frac_pos, color=color, linewidth=2.0, label=name)
+        plt.scatter(
+            mean_pred,
+            frac_pos,
+            color=color,
+            marker="o",
+            s=28,
+            edgecolor="white",
+            linewidth=0.6,
+            alpha=0.9,
+        )
+        rows.append(
+            {
+                "Model": name,
+                "Model_Role": get_model_role(name),
+                "ECE": expected_calibration_error(y_test, probs),
+            }
+        )
 
     plt.xlabel("Mean predicted probability")
     plt.ylabel("Observed frequency")
-    plt.title("Holdout Calibration Curve")
+    plt.title("Holdout Calibration Curve (Smoothed)")
     plt.legend(loc="upper left")
     plt.tight_layout()
-    plt.savefig(os.path.join(OUTPUT_DIR, "calibration_curve_holdout.png"), dpi=300)
+    plt.savefig(figure_output_path("calibration_curve_holdout.png"), dpi=300)
     plt.close()
 
     calibration_df = (
         pd.DataFrame(rows).sort_values("ECE", ascending=True).reset_index(drop=True)
     )
-    calibration_df.to_csv(
-        os.path.join(OUTPUT_DIR, "holdout_calibration_summary.csv"), index=False
-    )
+    calibration_df.to_csv(data_output_path("holdout_calibration_summary.csv"), index=False)
     return calibration_df
 
 
-def choose_final_model(cv_summary, holdout_metrics, spatial_metrics):
+def choose_final_model(
+    cv_summary,
+    holdout_metrics,
+    spatial_metrics,
+    deployment_candidates=BAYESIAN_MODEL_NAMES,
+):
     selection_df = cv_summary[
-        ["Model", "mcc_mean", "roc_auc_mean", "brier_mean", "logloss_mean", "ece_mean"]
+        [
+            "Model",
+            "Model_Role",
+            "mcc_mean",
+            "roc_auc_mean",
+            "brier_mean",
+            "logloss_mean",
+            "ece_mean",
+        ]
     ].copy()
     selection_df = selection_df.merge(
-        holdout_metrics[["Model", "MCC", "ROC_AUC", "Brier", "LogLoss", "ECE"]],
+        holdout_metrics[
+            ["Model", "Model_Role", "MCC", "ROC_AUC", "Brier", "LogLoss", "ECE"]
+        ].rename(columns={"Model_Role": "Model_Role_Holdout"}),
         on="Model",
         how="left",
     )
+    selection_df["Model_Role"] = (
+        selection_df["Model_Role"]
+        .fillna(selection_df["Model_Role_Holdout"])
+        .fillna(selection_df["Model"].map(get_model_role))
+    )
+    selection_df = selection_df.drop(columns=["Model_Role_Holdout"])
 
     if spatial_metrics is not None:
         selection_df = selection_df.merge(
-            spatial_metrics[["Model", "Spatial_MCC_Mean", "Spatial_ROC_AUC_Mean"]],
+            spatial_metrics[
+                ["Model", "Model_Role", "Spatial_MCC_Mean", "Spatial_ROC_AUC_Mean"]
+            ].rename(columns={"Model_Role": "Model_Role_Spatial"}),
             on="Model",
             how="left",
         )
+        selection_df["Model_Role"] = (
+            selection_df["Model_Role"]
+            .fillna(selection_df["Model_Role_Spatial"])
+            .fillna(selection_df["Model"].map(get_model_role))
+        )
+        selection_df = selection_df.drop(columns=["Model_Role_Spatial"])
     else:
         selection_df["Spatial_MCC_Mean"] = np.nan
         selection_df["Spatial_ROC_AUC_Mean"] = np.nan
@@ -726,11 +981,28 @@ def choose_final_model(cv_summary, holdout_metrics, spatial_metrics):
     selection_df = selection_df.sort_values(
         ["selection_score", "MCC", "mcc_mean"], ascending=[True, False, False]
     ).reset_index(drop=True)
-    selection_df.to_csv(
-        os.path.join(OUTPUT_DIR, "model_selection_table.csv"), index=False
+    selection_df["Overall_Rank"] = np.arange(1, len(selection_df) + 1, dtype=int)
+
+    deployment_candidates = tuple(deployment_candidates)
+    selection_df["Deployment_Eligible"] = selection_df["Model"].isin(
+        deployment_candidates
     )
-    best_model = selection_df.loc[0, "Model"]
-    return best_model, selection_df
+
+    eligible_df = selection_df.loc[selection_df["Deployment_Eligible"]].copy()
+    if eligible_df.empty:
+        raise ValueError(
+            "No deployment-eligible Bayesian models found in selection table."
+        )
+    eligible_df = eligible_df.sort_values(
+        ["selection_score", "MCC", "mcc_mean"], ascending=[True, False, False]
+    ).reset_index(drop=True)
+
+    best_overall_model = selection_df.loc[0, "Model"]
+    best_bayesian_model = eligible_df.loc[0, "Model"]
+    selection_df["Deployment_Selected"] = selection_df["Model"].eq(best_bayesian_model)
+
+    selection_df.to_csv(data_output_path("model_selection_table.csv"), index=False)
+    return best_bayesian_model, best_overall_model, selection_df
 
 
 def bootstrap_holdout_intervals(fitted_models, X_test, y_test, n_boot=1000):
@@ -756,7 +1028,7 @@ def bootstrap_holdout_intervals(fitted_models, X_test, y_test, n_boot=1000):
             metric_store["Brier"].append(brier_score_loss(y_b, p_b))
             metric_store["ECE"].append(expected_calibration_error(y_b, p_b))
 
-        row = {"Model": name}
+        row = {"Model": name, "Model_Role": get_model_role(name)}
         for metric_name, values in metric_store.items():
             arr = np.asarray(values, dtype=float)
             row[f"{metric_name}_Median"] = np.nanmedian(arr)
@@ -769,7 +1041,7 @@ def bootstrap_holdout_intervals(fitted_models, X_test, y_test, n_boot=1000):
         .sort_values("MCC_Median", ascending=False)
         .reset_index(drop=True)
     )
-    ci_df.to_csv(os.path.join(OUTPUT_DIR, "holdout_bootstrap_ci.csv"), index=False)
+    ci_df.to_csv(data_output_path("holdout_bootstrap_ci.csv"), index=False)
     return ci_df
 
 
@@ -816,6 +1088,7 @@ def spatial_block_validation(X, y, coords, model_builders):
         rows.append(
             {
                 "Model": name,
+                "Model_Role": get_model_role(name),
                 "Spatial_MCC_Mean": np.nanmean(mcc_scores),
                 "Spatial_MCC_Std": (
                     np.nanstd(mcc_scores, ddof=1) if len(mcc_scores) > 1 else 0.0
@@ -832,7 +1105,7 @@ def spatial_block_validation(X, y, coords, model_builders):
         .sort_values("Spatial_MCC_Mean", ascending=False)
         .reset_index(drop=True)
     )
-    spatial_df.to_csv(os.path.join(OUTPUT_DIR, "spatial_cv_metrics.csv"), index=False)
+    spatial_df.to_csv(data_output_path("spatial_cv_metrics.csv"), index=False)
     print(spatial_df.to_string(index=False))
     return spatial_df
 
@@ -842,6 +1115,9 @@ def explainable_ai(model, X_reference):
     if len(X_reference) < 10:
         print("Skipping SHAP: too few samples.")
         return
+
+    for old_file in glob.glob(figure_output_path("shap_dependence_top_*.png")):
+        safe_remove_file(old_file)
 
     try:
         background_n = min(30, len(X_reference))
@@ -872,7 +1148,7 @@ def explainable_ai(model, X_reference):
         plt.figure()
         shap.summary_plot(shap_values_target, X_explain_df, show=False)
         plt.tight_layout()
-        plt.savefig(os.path.join(OUTPUT_DIR, "shap_summary.png"), dpi=300)
+        plt.savefig(figure_output_path("shap_summary.png"), dpi=300)
         plt.close()
 
         mean_abs_shap = np.abs(shap_values_target).mean(axis=0)
@@ -884,10 +1160,7 @@ def explainable_ai(model, X_reference):
             plt.figure()
             shap.dependence_plot(feature, shap_values_target, X_explain_df, show=False)
             plt.tight_layout()
-            plt.savefig(
-                os.path.join(OUTPUT_DIR, f"shap_dependence_top_{i}_{feature}.png"),
-                dpi=300,
-            )
+            plt.savefig(figure_output_path(f"shap_dependence_top_{i}_{feature}.png"), dpi=300)
             plt.close()
     except Exception as exc:
         print(f"Warning: SHAP explanation skipped due to error: {exc}")
@@ -938,7 +1211,8 @@ def save_raster(data, filename, crs, transform):
 def predict_probs_and_uncertainty(model, X_df):
     probs = np.clip(model.predict_proba(X_df)[:, 1], 0.0, 1.0)
 
-    # Use epistemic uncertainty when available (BLR posterior), else fallback.
+    # Use Bayesian uncertainty when available (BLR posterior or GPC latent variance),
+    # else fallback to decision-boundary confidence.
     if isinstance(model, Pipeline) and "clf" in model.named_steps:
         clf = model.named_steps["clf"]
         if hasattr(clf, "predict_uncertainty"):
@@ -952,6 +1226,19 @@ def predict_probs_and_uncertainty(model, X_df):
             else:
                 uncertainty = np.zeros_like(probs)
             return probs, uncertainty
+        if hasattr(clf, "latent_mean_and_variance"):
+            try:
+                X_transformed = model[:-1].transform(X_df)
+                _, latent_var = clf.latent_mean_and_variance(X_transformed)
+                latent_std = np.sqrt(np.clip(np.asarray(latent_var, dtype=float), 0.0, None))
+                max_std = np.nanmax(latent_std)
+                if np.isfinite(max_std) and max_std > 0:
+                    uncertainty = np.clip(latent_std / max_std, 0.0, 1.0)
+                else:
+                    uncertainty = np.zeros_like(probs)
+                return probs, uncertainty
+            except Exception:
+                pass
 
     uncertainty = np.clip(1.0 - (np.abs(probs - 0.5) * 2.0), 0.0, 1.0)
     return probs, uncertainty
@@ -1037,9 +1324,9 @@ def generate_spatial_maps(model, df_full, features, shapefile_path):
     )
     grid_reclass[np.isnan(grid_susceptibility)] = np.nan
 
-    raw_lsm = os.path.join(OUTPUT_DIR, "LSM_Map_Raw.tif")
-    raw_uncert = os.path.join(OUTPUT_DIR, "Uncertainty_Map_Raw.tif")
-    raw_class = os.path.join(OUTPUT_DIR, "LSM_Map_Classified.tif")
+    raw_lsm = data_output_path("LSM_Map_Raw.tif")
+    raw_uncert = data_output_path("Uncertainty_Map_Raw.tif")
+    raw_class = data_output_path("LSM_Map_Classified.tif")
     save_raster(grid_susceptibility, raw_lsm, crs, transform)
     save_raster(grid_uncertainty, raw_uncert, crs, transform)
     save_raster(grid_reclass, raw_class, crs, transform)
@@ -1050,8 +1337,8 @@ def generate_spatial_maps(model, df_full, features, shapefile_path):
             ("Uncertainty_Map_Raw.tif", "Uncertainty_Map.tif"),
             ("LSM_Map_Classified.tif", "LSM_Map_Reclassified.tif"),
         ]:
-            in_path = os.path.join(OUTPUT_DIR, fin)
-            out_path = os.path.join(OUTPUT_DIR, fout)
+            in_path = data_output_path(fin)
+            out_path = data_output_path(fout)
             with rasterio.open(in_path) as src:
                 out_image, out_transform = mask(src, geometries, crop=True)
                 out_meta = src.meta.copy()
@@ -1066,12 +1353,12 @@ def generate_spatial_maps(model, df_full, features, shapefile_path):
             )
             with rasterio.open(out_path, "w", **out_meta) as dest:
                 dest.write(out_image)
-            os.remove(in_path)
+            safe_remove_file(in_path)
 
     print("\n--- SCAI Calculation ---")
-    reclass_path = os.path.join(OUTPUT_DIR, "LSM_Map_Reclassified.tif")
+    reclass_path = data_output_path("LSM_Map_Reclassified.tif")
     if not os.path.exists(reclass_path):
-        reclass_path = os.path.join(OUTPUT_DIR, "LSM_Map_Classified.tif")
+        reclass_path = data_output_path("LSM_Map_Classified.tif")
 
     scai_log = []
     with rasterio.open(reclass_path) as src:
@@ -1119,7 +1406,7 @@ def generate_spatial_maps(model, df_full, features, shapefile_path):
 
     scai_df = pd.DataFrame(scai_log)
     print(scai_df.to_string(index=False))
-    scai_df.to_csv(os.path.join(OUTPUT_DIR, "SCAI_Analysis.csv"), index=False)
+    scai_df.to_csv(data_output_path("SCAI_Analysis.csv"), index=False)
 
     all_probs, all_uncertainty = predict_probs_and_uncertainty(model, df_raw[features])
     all_classes = np.digitize(all_probs, bins=breaks[1:-1], right=True) + 1
@@ -1128,12 +1415,12 @@ def generate_spatial_maps(model, df_full, features, shapefile_path):
     df_export["Predicted_Prob"] = all_probs
     df_export["Predicted_Class"] = all_classes
     df_export["Uncertainty"] = all_uncertainty
-    output_path = os.path.join(OUTPUT_DIR, "LSM_Data.csv")
+    output_path = data_output_path("LSM_Data.csv")
     try:
         df_export.to_csv(output_path, index=False)
     except PermissionError:
         fallback = os.path.join(
-            OUTPUT_DIR,
+            DATA_OUTPUT_DIR,
             f"LSM_Data_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
         )
         df_export.to_csv(fallback, index=False)
@@ -1154,7 +1441,7 @@ def generate_spatial_maps(model, df_full, features, shapefile_path):
             "Predicted_Class": grid_classes.ravel(),
         }
     ).dropna()
-    grid_df.to_csv(os.path.join(OUTPUT_DIR, "LSM_Grid_Data.csv"), index=False)
+    grid_df.to_csv(data_output_path("LSM_Grid_Data.csv"), index=False)
 
 
 def save_model_report(
@@ -1167,6 +1454,7 @@ def save_model_report(
     selection_table,
     calibration_summary,
     final_model_name,
+    best_overall_model,
     train_size,
     test_size,
 ):
@@ -1181,6 +1469,14 @@ def save_model_report(
         "selected_features": selected_features,
         "dropped_features_vif": dropped_features,
         "final_model": final_model_name,
+        "best_overall_model": best_overall_model,
+        "deployment_candidates": list(BAYESIAN_MODEL_NAMES),
+        "benchmark_models": list(BENCHMARK_MODEL_NAMES),
+        "selection_policy": (
+            "All models are benchmarked under identical validation. Final deployment "
+            "is restricted to Bayesian candidates (BLR, GPC) for posterior "
+            "uncertainty representation and uncertainty-aware mapping objectives."
+        ),
         "cv_summary": cv_summary.to_dict(orient="records"),
         "holdout_metrics": holdout_metrics.to_dict(orient="records"),
         "holdout_bootstrap_ci": holdout_bootstrap_ci.to_dict(orient="records"),
@@ -1192,17 +1488,22 @@ def save_model_report(
         "model_selection_table": selection_table.to_dict(orient="records"),
         "holdout_calibration": calibration_summary.to_dict(orient="records"),
     }
-    with open(
-        os.path.join(OUTPUT_DIR, "model_report.json"), "w", encoding="utf-8"
-    ) as f:
+    with open(data_output_path("model_report.json"), "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2)
 
 
 def main():
     set_seed()
     ensure_output_dir()
+    model_builders = build_model_builders(include_benchmarks=INCLUDE_BENCHMARK_MODELS)
+    cleanup_model_artifacts(model_builders.keys())
+    print(f"Active model scope: {list(model_builders.keys())}")
+    print(f"Bayesian deployment candidates: {list(BAYESIAN_MODEL_NAMES)}")
+    print(f"Benchmark-only models: {list(BENCHMARK_MODEL_NAMES)}")
 
-    df, X, y, coords, features = load_dataset(DATA_FILE)
+    data_file = resolve_data_file(DATA_FILE)
+    print(f"Using input dataset: {data_file}")
+    df, X, y, coords, features = load_dataset(data_file)
 
     (
         X_train,
@@ -1226,24 +1527,11 @@ def main():
     print("Test class distribution:")
     print(y_test.value_counts().sort_index())
 
-    save_correlation_plot(
-        X_train[features],
-        "Correlation Matrix Before VIF Feature Selection (Train Split)",
-        "correlation_before.png",
-    )
-
     selected_features, dropped_features, vif_df = select_features_vif(
         X_train, threshold=VIF_THRESHOLD
     )
-    vif_df.to_csv(os.path.join(OUTPUT_DIR, "vif_selected_features.csv"), index=False)
-
-    save_correlation_plot(
-        X_train[selected_features],
-        "Correlation Matrix After VIF Feature Selection (Train Split)",
-        "correlation_after.png",
-    )
-
-    model_builders = build_model_builders()
+    vif_df.to_csv(data_output_path("vif_selected_features.csv"), index=False)
+    plot_vif_tolerance_curve(vif_df, threshold=VIF_THRESHOLD)
 
     metrics_log = cross_validation_and_modeling(
         X_train[selected_features], y_train, model_builders
@@ -1264,13 +1552,6 @@ def main():
         ].to_string(index=False)
     )
 
-    baseline_rows = cv_summary[cv_summary["Model"].isin(["RandomForest", "SVC", "BLR"])]
-    best_baseline_name = (
-        baseline_rows.iloc[0]["Model"] if not baseline_rows.empty else "RandomForest"
-    )
-    print(f"Best baseline model (by CV MCC): {best_baseline_name}")
-
-    evaluate_and_visualize_cv(metrics_log, best_baseline_name)
     statistical_validation(metrics_log, metric_name="f1")
 
     spatial_metrics = spatial_block_validation(
@@ -1284,6 +1565,8 @@ def main():
         X_test[selected_features],
         y_test,
     )
+    plot_holdout_discrimination_curves(fitted_models, X_test[selected_features], y_test)
+    plot_holdout_confusion_matrices(fitted_models, X_test[selected_features], y_test)
     calibration_summary = plot_holdout_calibration(
         fitted_models, X_test[selected_features], y_test
     )
@@ -1305,20 +1588,46 @@ def main():
         ].to_string(index=False)
     )
 
-    final_model_name, selection_table = choose_final_model(
-        cv_summary, holdout_metrics, spatial_metrics
+    final_model_name, best_overall_model, selection_table = choose_final_model(
+        cv_summary,
+        holdout_metrics,
+        spatial_metrics,
+        deployment_candidates=BAYESIAN_MODEL_NAMES,
     )
-    print(f"\nFinal model selected by multi-criteria ranking: {final_model_name}")
+    print(
+        f"\nBest overall benchmark model by ranking (all models): {best_overall_model}"
+    )
+    print(
+        f"Final Bayesian deployment model (restricted to BLR/GPC): {final_model_name}"
+    )
     print(
         selection_table[
-            ["Model", "selection_score", "MCC", "Spatial_MCC_Mean", "mcc_mean"]
+            [
+                "Model",
+                "Model_Role",
+                "selection_score",
+                "Overall_Rank",
+                "Deployment_Eligible",
+                "Deployment_Selected",
+                "MCC",
+                "Spatial_MCC_Mean",
+                "mcc_mean",
+            ]
         ].to_string(index=False)
     )
+    if best_overall_model != final_model_name:
+        print(
+            "Deployment justification: benchmark models may score higher on "
+            "discrimination, but final map production is restricted to Bayesian "
+            "models for posterior uncertainty representation, calibration-aware "
+            "probability interpretation, and alignment with the uncertainty-aware "
+            "research objective."
+        )
 
     explainable_ai(fitted_models[final_model_name], X_train[selected_features])
 
     print(f"\nTraining final {final_model_name} on all data for map generation...")
-    final_model = build_pipeline(build_model_builders()[final_model_name]())
+    final_model = build_pipeline(model_builders[final_model_name]())
     final_model.fit(X[selected_features], y)
     generate_spatial_maps(final_model, df, selected_features, SHAPEFILE)
 
@@ -1332,6 +1641,7 @@ def main():
         selection_table=selection_table,
         calibration_summary=calibration_summary,
         final_model_name=final_model_name,
+        best_overall_model=best_overall_model,
         train_size=len(X_train),
         test_size=len(X_test),
     )

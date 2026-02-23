@@ -1,5 +1,5 @@
-Model,ECE
-GPC,0.0836391593116486
-BLR,0.11174441656790249
-RandomForest,0.11992344463708172
-SVC,0.16352840692171036
+Model,Model_Role,ECE
+GPC,Bayesian Deployment Candidate,0.0836391593116486
+LogReg_L2,Benchmark Performance Model,0.1096362975558916
+BLR,Bayesian Deployment Candidate,0.11174441656790249
+RandomForest,Benchmark Performance Model,0.11992344463708174
