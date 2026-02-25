@@ -1,5 +1,6 @@
 Model,Model_Role,ECE
-GPC,Bayesian Deployment Candidate,0.0836391593116486
-LogReg_L2,Benchmark Performance Model,0.1096362975558916
-BLR,Bayesian Deployment Candidate,0.11174441656790249
-RandomForest,Benchmark Performance Model,0.11992344463708174
+GPC,Bayesian Deployment Candidate,0.08363915931166568
+LR,Benchmark Performance Model,0.10970261618710107
+BLR,Bayesian Deployment Candidate,0.11539371771215663
+BNN,Bayesian Deployment Candidate,0.11910572484437679
+DeepEnsemble,Bayesian Deployment Candidate,0.1293675450394182

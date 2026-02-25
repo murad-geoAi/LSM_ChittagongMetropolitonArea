@@ -1,4 +1,4 @@
 test=friedman
 metric=f1
-statistic=17.727273
-p_value=0.0005006466
+statistic=12.145985
+p_value=0.0162980630

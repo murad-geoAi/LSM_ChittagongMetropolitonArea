@@ -1,0 +1,9 @@
+{
+  "n_samples": 369,
+  "n_features": 14,
+  "n_positive": 155,
+  "n_negative": 214,
+  "positive_ratio": 0.42005420054200543,
+  "total_missing": 126,
+  "missing_rate": 0.024390243902439025
+}

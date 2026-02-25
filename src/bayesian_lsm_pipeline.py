@@ -3,6 +3,7 @@ import json
 import os
 import random
 import warnings
+from dataclasses import dataclass
 
 import geopandas as gpd
 import jenkspy
@@ -23,14 +24,11 @@ from shapely.geometry import mapping
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.calibration import calibration_curve
 from sklearn.cluster import KMeans
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.gaussian_process import GaussianProcessClassifier
 from sklearn.gaussian_process.kernels import Matern, WhiteKernel
 from sklearn.impute import SimpleImputer
-from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     accuracy_score,
-    auc,
     average_precision_score,
     brier_score_loss,
     confusion_matrix,
@@ -46,11 +44,25 @@ from sklearn.metrics import (
 from sklearn.model_selection import (
     GroupKFold,
     RepeatedStratifiedKFold,
+    StratifiedShuffleSplit,
     train_test_split,
 )
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from statsmodels.stats.outliers_influence import variance_inflation_factor
+
+try:
+    import pytorch_lightning as pl
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from pytorch_lightning.callbacks import EarlyStopping
+    from torch.utils.data import DataLoader, TensorDataset
+except ModuleNotFoundError as exc:
+    raise ModuleNotFoundError(
+        "Missing deep-learning dependency. Install requirements.txt before running "
+        "the knowledge-guided pipeline (torch, pytorch-lightning, fsspec)."
+    ) from exc
 
 warnings.filterwarnings("ignore")
 
@@ -58,7 +70,7 @@ warnings.filterwarnings("ignore")
 RESULTS_DIR = "results"
 DATA_OUTPUT_DIR = os.path.join(RESULTS_DIR, "data")
 FIG_OUTPUT_DIR = os.path.join(RESULTS_DIR, "figures")
-DATA_FILE = "Landslide_Data.csv"
+DATA_FILE_CANDIDATES = ("Landslide_Data.csv", "results/data/LSM_Data.csv")
 SHAPEFILE = None
 RANDOM_SEED = 42
 
@@ -66,6 +78,7 @@ RANDOM_SEED = 42
 TARGET_COL = "Landslide"
 LON_COL = "Longitude"
 LAT_COL = "Latitude"
+LEAKAGE_COLS = {"Predicted_Prob", "Predicted_Class", "Uncertainty"}
 
 # Modeling configuration
 TEST_SIZE = 0.20
@@ -74,26 +87,78 @@ CV_SPLITS = 5
 CV_REPEATS = 3
 NUM_CLASSES = 5
 HOLDOUT_BOOTSTRAP_ITER = 1200
-BAYESIAN_MODEL_NAMES = ("BLR", "GPC")
-BENCHMARK_MODEL_NAMES = ("LogReg_L2", "RandomForest")
+BAYESIAN_MODEL_NAMES = ("BNN", "DeepEnsemble", "BLR", "GPC")
+BENCHMARK_MODEL_NAMES = ("LR",)
 INCLUDE_BENCHMARK_MODELS = True
+DEEP_MODEL_MAX_EPOCHS = 90
+DEEP_MODEL_PATIENCE = 12
+DEEP_MODEL_BATCH_SIZE = 64
+BNN_MC_SAMPLES = 80
+DEEP_ENSEMBLE_MEMBERS = 3
+KNOWLEDGE_GUIDED_LAMBDA_DEEP = 0.15
+KNOWLEDGE_GUIDED_LAMBDA_LINEAR = 0.30
+KNOWLEDGE_GUIDED_PRIORS = {
+    "Elevation": +1.0,
+    "Slope": +1.0,
+    "Precipitation": +1.0,
+    "TRI": +1.0,
+    "Drainage_Density": +1.0,
+    "Distance_to_River": -1.0,
+    "Distance_to_Road": -1.0,
+    "NDVI": -1.0,
+}
 
 
-class BayesianLogisticRegression(BaseEstimator, ClassifierMixin):
-    """Binary Bayesian logistic regression using Laplace approximation."""
+def stable_softplus_np(x):
+    x = np.asarray(x, dtype=float)
+    return np.log1p(np.exp(-np.abs(x))) + np.maximum(x, 0.0)
+
+
+def stable_sigmoid_np(x):
+    x = np.clip(np.asarray(x, dtype=float), -40.0, 40.0)
+    return expit(x)
+
+
+def build_knowledge_constraints(feature_names):
+    constraints = {}
+    for i, name in enumerate(feature_names):
+        if name in KNOWLEDGE_GUIDED_PRIORS:
+            constraints[int(i)] = float(KNOWLEDGE_GUIDED_PRIORS[name])
+    return constraints
+
+
+@dataclass
+class DatasetCharacteristics:
+    n_samples: int
+    n_features: int
+    n_positive: int
+    n_negative: int
+    positive_ratio: float
+    total_missing: int
+    missing_rate: float
+
+
+class KnowledgeGuidedLogisticRegression(BaseEstimator, ClassifierMixin):
+    """Deterministic logistic regression with soft sign constraints."""
 
     def __init__(
         self,
-        prior_precision=1.0,
-        max_iter=400,
+        l2_strength=1.0,
+        class_weight="balanced",
+        max_iter=500,
         tol=1e-6,
-        n_posterior_samples=400,
+        knowledge_constraints=None,
+        knowledge_lambda=KNOWLEDGE_GUIDED_LAMBDA_LINEAR,
         random_state=RANDOM_SEED,
     ):
-        self.prior_precision = prior_precision
+        self.l2_strength = l2_strength
+        self.class_weight = class_weight
         self.max_iter = max_iter
         self.tol = tol
-        self.n_posterior_samples = n_posterior_samples
+        self.knowledge_constraints = (
+            {} if knowledge_constraints is None else dict(knowledge_constraints)
+        )
+        self.knowledge_lambda = knowledge_lambda
         self.random_state = random_state
 
     def _prepare_X(self, X):
@@ -102,31 +167,199 @@ class BayesianLogisticRegression(BaseEstimator, ClassifierMixin):
             X_arr = X_arr.reshape(-1, 1)
         return X_arr
 
-    def fit(self, X, y):
-        X_arr = self._prepare_X(X)
+    def _prepare_targets(self, y):
         y_arr = np.asarray(y, dtype=float).ravel()
         unique = np.unique(y_arr)
         if set(unique.tolist()) - {0.0, 1.0}:
             raise ValueError(
-                "BayesianLogisticRegression supports binary labels {0,1} only."
+                "KnowledgeGuidedLogisticRegression supports binary labels {0,1} only."
             )
+        return y_arr
 
+    def _prepare_sample_weights(self, y_arr):
+        if self.class_weight != "balanced":
+            return np.ones_like(y_arr, dtype=float)
+        n_pos = np.sum(y_arr == 1.0)
+        n_neg = np.sum(y_arr == 0.0)
+        if n_pos == 0 or n_neg == 0:
+            return np.ones_like(y_arr, dtype=float)
+        w_pos = len(y_arr) / (2.0 * n_pos)
+        w_neg = len(y_arr) / (2.0 * n_neg)
+        return np.where(y_arr == 1.0, w_pos, w_neg).astype(float)
+
+    def _constraint_vector(self, n_params):
+        signs = np.zeros(n_params, dtype=float)
+        for idx, sign in self.knowledge_constraints.items():
+            pos = int(idx) + 1  # +1 due intercept in augmented design.
+            if 1 <= pos < n_params and sign != 0:
+                signs[pos] = np.sign(float(sign))
+        return signs
+
+    def fit(self, X, y):
+        X_arr = self._prepare_X(X)
+        y_arr = self._prepare_targets(y)
         n_samples = X_arr.shape[0]
         X_aug = np.hstack([np.ones((n_samples, 1)), X_arr])
         n_params = X_aug.shape[1]
-
-        prior_diag = np.full(n_params, float(self.prior_precision))
-        prior_diag[0] = 0.0  # Unpenalized intercept.
+        sample_w = self._prepare_sample_weights(y_arr)
+        sign_vec = self._constraint_vector(n_params)
+        sign_mask = sign_vec != 0.0
+        n_constraints = max(int(np.sum(sign_mask)), 1)
 
         def nlp_and_grad(w):
             logits = np.clip(X_aug @ w, -35.0, 35.0)
-            probs = expit(logits)
+            probs = stable_sigmoid_np(logits)
+            eps = 1e-12
+            nll = -np.sum(
+                sample_w
+                * (
+                    y_arr * np.log(probs + eps)
+                    + (1.0 - y_arr) * np.log(1.0 - probs + eps)
+                )
+            )
+            grad = X_aug.T @ (sample_w * (probs - y_arr))
+
+            if self.l2_strength > 0:
+                nll += 0.5 * float(self.l2_strength) * np.sum(w[1:] ** 2)
+                grad[1:] += float(self.l2_strength) * w[1:]
+
+            if self.knowledge_lambda > 0 and np.any(sign_mask):
+                z = -sign_vec[sign_mask] * w[sign_mask]
+                sp = stable_softplus_np(z)
+                sig = stable_sigmoid_np(z)
+                nll += float(self.knowledge_lambda) * np.sum(sp**2) / n_constraints
+                grad_kg = -2.0 * sign_vec[sign_mask] * sp * sig
+                grad[sign_mask] += (
+                    float(self.knowledge_lambda) * grad_kg / n_constraints
+                )
+            return nll, grad
+
+        w0 = np.zeros(n_params, dtype=float)
+        opt = minimize(
+            fun=lambda w: nlp_and_grad(w)[0],
+            x0=w0,
+            jac=lambda w: nlp_and_grad(w)[1],
+            method="L-BFGS-B",
+            options={"maxiter": int(self.max_iter), "ftol": float(self.tol)},
+        )
+        self.optim_result_ = opt
+        if not opt.success:
+            print(f"Warning: LR optimizer did not fully converge: {opt.message}")
+        self.coef_map_ = opt.x
+        self.classes_ = np.array([0, 1], dtype=int)
+        self.n_features_in_ = X_arr.shape[1]
+        if isinstance(X, pd.DataFrame):
+            self.feature_names_in_ = X.columns.to_numpy()
+        return self
+
+    def decision_function(self, X):
+        X_arr = self._prepare_X(X)
+        X_aug = np.hstack([np.ones((X_arr.shape[0], 1)), X_arr])
+        return np.clip(X_aug @ self.coef_map_, -35.0, 35.0)
+
+    def predict_proba(self, X):
+        probs = stable_sigmoid_np(self.decision_function(X))
+        probs = np.clip(probs, 1e-9, 1.0 - 1e-9)
+        return np.column_stack([1.0 - probs, probs])
+
+    def predict(self, X):
+        return (self.predict_proba(X)[:, 1] >= 0.5).astype(int)
+
+
+class BayesianLogisticRegression(BaseEstimator, ClassifierMixin):
+    """Binary Bayesian logistic regression with Laplace posterior approximation."""
+
+    def __init__(
+        self,
+        prior_precision=1.0,
+        class_weight="balanced",
+        max_iter=500,
+        tol=1e-6,
+        n_posterior_samples=400,
+        knowledge_constraints=None,
+        knowledge_lambda=KNOWLEDGE_GUIDED_LAMBDA_LINEAR,
+        random_state=RANDOM_SEED,
+    ):
+        self.prior_precision = prior_precision
+        self.class_weight = class_weight
+        self.max_iter = max_iter
+        self.tol = tol
+        self.n_posterior_samples = n_posterior_samples
+        self.knowledge_constraints = (
+            {} if knowledge_constraints is None else dict(knowledge_constraints)
+        )
+        self.knowledge_lambda = knowledge_lambda
+        self.random_state = random_state
+
+    def _prepare_X(self, X):
+        X_arr = np.asarray(X, dtype=float)
+        if X_arr.ndim == 1:
+            X_arr = X_arr.reshape(-1, 1)
+        return X_arr
+
+    def _prepare_targets(self, y):
+        y_arr = np.asarray(y, dtype=float).ravel()
+        unique = np.unique(y_arr)
+        if set(unique.tolist()) - {0.0, 1.0}:
+            raise ValueError("BayesianLogisticRegression supports binary labels {0,1}.")
+        return y_arr
+
+    def _prepare_sample_weights(self, y_arr):
+        if self.class_weight != "balanced":
+            return np.ones_like(y_arr, dtype=float)
+        n_pos = np.sum(y_arr == 1.0)
+        n_neg = np.sum(y_arr == 0.0)
+        if n_pos == 0 or n_neg == 0:
+            return np.ones_like(y_arr, dtype=float)
+        w_pos = len(y_arr) / (2.0 * n_pos)
+        w_neg = len(y_arr) / (2.0 * n_neg)
+        return np.where(y_arr == 1.0, w_pos, w_neg).astype(float)
+
+    def _constraint_vector(self, n_params):
+        signs = np.zeros(n_params, dtype=float)
+        for idx, sign in self.knowledge_constraints.items():
+            pos = int(idx) + 1
+            if 1 <= pos < n_params and sign != 0:
+                signs[pos] = np.sign(float(sign))
+        return signs
+
+    def fit(self, X, y):
+        X_arr = self._prepare_X(X)
+        y_arr = self._prepare_targets(y)
+        n_samples = X_arr.shape[0]
+        X_aug = np.hstack([np.ones((n_samples, 1)), X_arr])
+        n_params = X_aug.shape[1]
+        sample_w = self._prepare_sample_weights(y_arr)
+
+        prior_diag = np.full(n_params, float(self.prior_precision))
+        prior_diag[0] = 0.0
+        sign_vec = self._constraint_vector(n_params)
+        sign_mask = sign_vec != 0.0
+        n_constraints = max(int(np.sum(sign_mask)), 1)
+
+        def nlp_and_grad(w):
+            logits = np.clip(X_aug @ w, -35.0, 35.0)
+            probs = stable_sigmoid_np(logits)
             eps = 1e-12
             nlp = -np.sum(
-                y_arr * np.log(probs + eps) + (1.0 - y_arr) * np.log(1.0 - probs + eps)
+                sample_w
+                * (
+                    y_arr * np.log(probs + eps)
+                    + (1.0 - y_arr) * np.log(1.0 - probs + eps)
+                )
             )
             nlp += 0.5 * np.sum(prior_diag * (w**2))
-            grad = X_aug.T @ (probs - y_arr) + prior_diag * w
+            grad = X_aug.T @ (sample_w * (probs - y_arr)) + prior_diag * w
+
+            if self.knowledge_lambda > 0 and np.any(sign_mask):
+                z = -sign_vec[sign_mask] * w[sign_mask]
+                sp = stable_softplus_np(z)
+                sig = stable_sigmoid_np(z)
+                nlp += float(self.knowledge_lambda) * np.sum(sp**2) / n_constraints
+                grad_kg = -2.0 * sign_vec[sign_mask] * sp * sig
+                grad[sign_mask] += (
+                    float(self.knowledge_lambda) * grad_kg / n_constraints
+                )
             return nlp, grad
 
         w0 = np.zeros(n_params, dtype=float)
@@ -143,9 +376,17 @@ class BayesianLogisticRegression(BaseEstimator, ClassifierMixin):
         self.coef_map_ = opt.x
 
         logits = np.clip(X_aug @ self.coef_map_, -35.0, 35.0)
-        probs = expit(logits)
-        w_diag = probs * (1.0 - probs)
+        probs = stable_sigmoid_np(logits)
+        w_diag = sample_w * probs * (1.0 - probs)
         hessian = X_aug.T @ (X_aug * w_diag[:, None]) + np.diag(prior_diag)
+        if self.knowledge_lambda > 0 and np.any(sign_mask):
+            z = -sign_vec[sign_mask] * self.coef_map_[sign_mask]
+            sp = stable_softplus_np(z)
+            sig = stable_sigmoid_np(z)
+            diag_kg = 2.0 * (sig**2 + sp * sig * (1.0 - sig))
+            hessian[np.ix_(np.where(sign_mask)[0], np.where(sign_mask)[0])] += np.diag(
+                float(self.knowledge_lambda) * diag_kg / n_constraints
+            )
         hessian += np.eye(n_params) * 1e-6
         self.posterior_cov_ = np.linalg.pinv(hessian)
 
@@ -166,7 +407,7 @@ class BayesianLogisticRegression(BaseEstimator, ClassifierMixin):
     def predict_proba(self, X):
         mean, var, _ = self._predict_mean_var(X)
         denom = np.sqrt(1.0 + (np.pi * var / 8.0))
-        probs = expit(mean / np.maximum(denom, 1e-9))
+        probs = stable_sigmoid_np(mean / np.maximum(denom, 1e-9))
         probs = np.clip(probs, 1e-9, 1.0 - 1e-9)
         return np.column_stack([1.0 - probs, probs])
 
@@ -185,19 +426,405 @@ class BayesianLogisticRegression(BaseEstimator, ClassifierMixin):
         rng = np.random.default_rng(self.random_state)
         draws = rng.multivariate_normal(self.coef_map_, cov, size=n_draws)
         logits_draws = X_aug @ draws.T
-        probs_draws = expit(np.clip(logits_draws, -35.0, 35.0))
+        probs_draws = stable_sigmoid_np(np.clip(logits_draws, -35.0, 35.0))
 
         mean_prob = np.mean(probs_draws, axis=1)
         std_prob = np.std(probs_draws, axis=1)
-        # Keep deterministic center consistent with Laplace predictive mean when close.
-        laplace_mean = expit(
+        laplace_mean = stable_sigmoid_np(
             mean / np.sqrt(1.0 + (np.pi * np.var(logits_draws, axis=1) / 8.0))
         )
         mean_prob = 0.5 * mean_prob + 0.5 * laplace_mean
         return np.clip(mean_prob, 1e-9, 1.0 - 1e-9), std_prob
 
 
+class SmallMLP(nn.Module):
+    """Compact MLP for small tabular datasets."""
+
+    def __init__(self, input_dim, hidden_dims=(32, 16), dropout=0.25):
+        super().__init__()
+        h1, h2 = int(hidden_dims[0]), int(hidden_dims[1])
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, h1),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(h1, h2),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(h2, 1),
+        )
+        for module in self.modules():
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                nn.init.zeros_(module.bias)
+
+    def forward(self, x):
+        return self.net(x).squeeze(-1)
+
+
+class KnowledgeGuidedLightningModule(pl.LightningModule):
+    """Binary classifier module with monotonicity-guided regularization."""
+
+    def __init__(
+        self,
+        input_dim,
+        hidden_dims=(32, 16),
+        dropout=0.25,
+        lr=1e-3,
+        weight_decay=1e-3,
+        pos_weight=1.0,
+        knowledge_constraints=None,
+        knowledge_lambda=KNOWLEDGE_GUIDED_LAMBDA_DEEP,
+    ):
+        super().__init__()
+        self.save_hyperparameters(ignore=["knowledge_constraints"])
+        self.model = SmallMLP(input_dim=input_dim, hidden_dims=hidden_dims, dropout=dropout)
+        self.lr = float(lr)
+        self.weight_decay = float(weight_decay)
+        self.knowledge_lambda = float(knowledge_lambda)
+        constraints = {} if knowledge_constraints is None else dict(knowledge_constraints)
+        idx = sorted(int(k) for k in constraints.keys())
+        signs = [float(np.sign(constraints[i])) for i in idx]
+        self.register_buffer("kg_idx", torch.tensor(idx, dtype=torch.long))
+        self.register_buffer("kg_sign", torch.tensor(signs, dtype=torch.float32))
+        self.register_buffer(
+            "pos_weight_tensor", torch.tensor(float(pos_weight), dtype=torch.float32)
+        )
+
+    def forward(self, x):
+        return self.model(x)
+
+    def _knowledge_penalty(self, x, logits):
+        if self.kg_idx.numel() == 0 or self.knowledge_lambda <= 0:
+            return torch.zeros((), device=self.device)
+        grads = torch.autograd.grad(
+            outputs=logits,
+            inputs=x,
+            grad_outputs=torch.ones_like(logits),
+            create_graph=True,
+            retain_graph=True,
+            allow_unused=False,
+        )[0]
+        constrained_grads = grads[:, self.kg_idx]
+        signed_grad = constrained_grads * self.kg_sign.unsqueeze(0)
+        violations = F.relu(-signed_grad)
+        return torch.mean(violations**2)
+
+    def _shared_step(self, batch, stage):
+        x, y = batch
+        x = x.float()
+        y = y.float()
+        use_kg = stage == "train" and self.kg_idx.numel() > 0 and self.knowledge_lambda > 0
+        if use_kg:
+            x = x.requires_grad_(True)
+        logits = self.forward(x)
+        bce = F.binary_cross_entropy_with_logits(
+            logits, y, pos_weight=self.pos_weight_tensor
+        )
+        kg_penalty = self._knowledge_penalty(x, logits) if use_kg else torch.zeros(
+            (), device=self.device
+        )
+        loss = bce + (self.knowledge_lambda * kg_penalty)
+        self.log(f"{stage}_loss", loss, on_epoch=True, prog_bar=(stage != "train"))
+        if stage == "train":
+            self.log("train_bce", bce, on_epoch=True, prog_bar=False)
+            self.log("train_kg", kg_penalty, on_epoch=True, prog_bar=False)
+        return loss
+
+    def training_step(self, batch, batch_idx):
+        return self._shared_step(batch, stage="train")
+
+    def validation_step(self, batch, batch_idx):
+        self._shared_step(batch, stage="val")
+
+    def configure_optimizers(self):
+        return torch.optim.AdamW(
+            self.parameters(), lr=self.lr, weight_decay=self.weight_decay
+        )
+
+
+def train_val_loaders(
+    X_arr,
+    y_arr,
+    batch_size=DEEP_MODEL_BATCH_SIZE,
+    val_fraction=0.15,
+    random_state=RANDOM_SEED,
+):
+    n_samples = len(y_arr)
+    batch_size = int(max(8, min(batch_size, n_samples)))
+    X_tensor = torch.tensor(X_arr, dtype=torch.float32)
+    y_tensor = torch.tensor(y_arr, dtype=torch.float32)
+
+    unique, counts = np.unique(y_arr.astype(int), return_counts=True)
+    min_count = int(np.min(counts)) if len(counts) > 0 else 0
+    can_split = n_samples >= 40 and len(unique) == 2 and min_count >= 5
+
+    if can_split:
+        sss = StratifiedShuffleSplit(
+            n_splits=1, test_size=float(val_fraction), random_state=random_state
+        )
+        train_idx, val_idx = next(sss.split(X_arr, y_arr))
+        train_ds = TensorDataset(X_tensor[train_idx], y_tensor[train_idx])
+        val_ds = TensorDataset(X_tensor[val_idx], y_tensor[val_idx])
+        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+        val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
+        return train_loader, val_loader
+
+    train_ds = TensorDataset(X_tensor, y_tensor)
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+    return train_loader, None
+
+
+def fit_lightning_model(
+    X_arr,
+    y_arr,
+    knowledge_constraints,
+    hidden_dims=(32, 16),
+    dropout=0.25,
+    lr=1e-3,
+    weight_decay=1e-3,
+    max_epochs=DEEP_MODEL_MAX_EPOCHS,
+    patience=DEEP_MODEL_PATIENCE,
+    batch_size=DEEP_MODEL_BATCH_SIZE,
+    knowledge_lambda=KNOWLEDGE_GUIDED_LAMBDA_DEEP,
+    random_state=RANDOM_SEED,
+):
+    pl.seed_everything(int(random_state), workers=True)
+    train_loader, val_loader = train_val_loaders(
+        X_arr,
+        y_arr,
+        batch_size=batch_size,
+        random_state=random_state,
+    )
+
+    n_pos = max(np.sum(y_arr == 1), 1)
+    n_neg = max(np.sum(y_arr == 0), 1)
+    pos_weight = float(n_neg / n_pos)
+
+    module = KnowledgeGuidedLightningModule(
+        input_dim=X_arr.shape[1],
+        hidden_dims=hidden_dims,
+        dropout=dropout,
+        lr=lr,
+        weight_decay=weight_decay,
+        pos_weight=pos_weight,
+        knowledge_constraints=knowledge_constraints,
+        knowledge_lambda=knowledge_lambda,
+    )
+
+    callbacks = []
+    if val_loader is not None:
+        callbacks.append(
+            EarlyStopping(
+                monitor="val_loss",
+                mode="min",
+                patience=int(patience),
+                min_delta=1e-4,
+            )
+        )
+
+    trainer = pl.Trainer(
+        max_epochs=int(max_epochs),
+        accelerator="cpu",
+        devices=1,
+        logger=False,
+        enable_checkpointing=False,
+        enable_progress_bar=False,
+        enable_model_summary=False,
+        num_sanity_val_steps=0,
+        callbacks=callbacks,
+        deterministic=True,
+        gradient_clip_val=1.0,
+    )
+    trainer.fit(model=module, train_dataloaders=train_loader, val_dataloaders=val_loader)
+    module.eval()
+    return module
+
+
+class BayesianNeuralNetworkClassifier(BaseEstimator, ClassifierMixin):
+    """MC-dropout Bayesian neural network in sklearn-compatible form."""
+
+    def __init__(
+        self,
+        hidden_dims=(32, 16),
+        dropout=0.25,
+        lr=1e-3,
+        weight_decay=1e-3,
+        max_epochs=DEEP_MODEL_MAX_EPOCHS,
+        patience=DEEP_MODEL_PATIENCE,
+        batch_size=DEEP_MODEL_BATCH_SIZE,
+        mc_samples=BNN_MC_SAMPLES,
+        knowledge_constraints=None,
+        knowledge_lambda=KNOWLEDGE_GUIDED_LAMBDA_DEEP,
+        random_state=RANDOM_SEED,
+    ):
+        self.hidden_dims = hidden_dims
+        self.dropout = dropout
+        self.lr = lr
+        self.weight_decay = weight_decay
+        self.max_epochs = max_epochs
+        self.patience = patience
+        self.batch_size = batch_size
+        self.mc_samples = mc_samples
+        self.knowledge_constraints = (
+            {} if knowledge_constraints is None else dict(knowledge_constraints)
+        )
+        self.knowledge_lambda = knowledge_lambda
+        self.random_state = random_state
+
+    def _prepare_X(self, X):
+        X_arr = np.asarray(X, dtype=np.float32)
+        if X_arr.ndim == 1:
+            X_arr = X_arr.reshape(-1, 1)
+        return X_arr
+
+    def fit(self, X, y):
+        X_arr = self._prepare_X(X)
+        y_arr = np.asarray(y, dtype=np.float32).ravel()
+        unique = np.unique(y_arr)
+        if set(unique.tolist()) - {0.0, 1.0}:
+            raise ValueError("BNN supports binary labels {0,1} only.")
+        self.module_ = fit_lightning_model(
+            X_arr=X_arr,
+            y_arr=y_arr,
+            knowledge_constraints=self.knowledge_constraints,
+            hidden_dims=self.hidden_dims,
+            dropout=self.dropout,
+            lr=self.lr,
+            weight_decay=self.weight_decay,
+            max_epochs=self.max_epochs,
+            patience=self.patience,
+            batch_size=self.batch_size,
+            knowledge_lambda=self.knowledge_lambda,
+            random_state=self.random_state,
+        )
+        self.classes_ = np.array([0, 1], dtype=int)
+        self.n_features_in_ = X_arr.shape[1]
+        return self
+
+    def predict_uncertainty(self, X, n_samples=None):
+        X_arr = self._prepare_X(X)
+        x_tensor = torch.tensor(X_arr, dtype=torch.float32)
+        n_draws = int(n_samples if n_samples is not None else self.mc_samples)
+        n_draws = max(30, n_draws)
+        torch.manual_seed(int(self.random_state))
+
+        draws = []
+        with torch.no_grad():
+            for _ in range(n_draws):
+                self.module_.train()
+                logits = self.module_(x_tensor)
+                probs = torch.sigmoid(logits).cpu().numpy()
+                draws.append(probs)
+        draw_arr = np.vstack(draws)
+        mean_prob = np.clip(np.mean(draw_arr, axis=0), 1e-9, 1.0 - 1e-9)
+        std_prob = np.std(draw_arr, axis=0)
+        self.module_.eval()
+        return mean_prob, std_prob
+
+    def predict_proba(self, X):
+        mean_prob, _ = self.predict_uncertainty(X, n_samples=self.mc_samples)
+        return np.column_stack([1.0 - mean_prob, mean_prob])
+
+    def predict(self, X):
+        return (self.predict_proba(X)[:, 1] >= 0.5).astype(int)
+
+
+class DeepEnsembleClassifier(BaseEstimator, ClassifierMixin):
+    """Deep ensemble of compact neural networks."""
+
+    def __init__(
+        self,
+        ensemble_size=DEEP_ENSEMBLE_MEMBERS,
+        hidden_dims=(32, 16),
+        dropout=0.15,
+        lr=1e-3,
+        weight_decay=1e-3,
+        max_epochs=DEEP_MODEL_MAX_EPOCHS,
+        patience=DEEP_MODEL_PATIENCE,
+        batch_size=DEEP_MODEL_BATCH_SIZE,
+        knowledge_constraints=None,
+        knowledge_lambda=KNOWLEDGE_GUIDED_LAMBDA_DEEP,
+        random_state=RANDOM_SEED,
+    ):
+        self.ensemble_size = ensemble_size
+        self.hidden_dims = hidden_dims
+        self.dropout = dropout
+        self.lr = lr
+        self.weight_decay = weight_decay
+        self.max_epochs = max_epochs
+        self.patience = patience
+        self.batch_size = batch_size
+        self.knowledge_constraints = (
+            {} if knowledge_constraints is None else dict(knowledge_constraints)
+        )
+        self.knowledge_lambda = knowledge_lambda
+        self.random_state = random_state
+
+    def _prepare_X(self, X):
+        X_arr = np.asarray(X, dtype=np.float32)
+        if X_arr.ndim == 1:
+            X_arr = X_arr.reshape(-1, 1)
+        return X_arr
+
+    def fit(self, X, y):
+        X_arr = self._prepare_X(X)
+        y_arr = np.asarray(y, dtype=np.float32).ravel()
+        unique = np.unique(y_arr)
+        if set(unique.tolist()) - {0.0, 1.0}:
+            raise ValueError("DeepEnsemble supports binary labels {0,1} only.")
+
+        self.members_ = []
+        for member_idx in range(int(max(1, self.ensemble_size))):
+            seed = int(self.random_state + member_idx * 13)
+            member = fit_lightning_model(
+                X_arr=X_arr,
+                y_arr=y_arr,
+                knowledge_constraints=self.knowledge_constraints,
+                hidden_dims=self.hidden_dims,
+                dropout=self.dropout,
+                lr=self.lr,
+                weight_decay=self.weight_decay,
+                max_epochs=self.max_epochs,
+                patience=self.patience,
+                batch_size=self.batch_size,
+                knowledge_lambda=self.knowledge_lambda,
+                random_state=seed,
+            )
+            self.members_.append(member)
+
+        self.classes_ = np.array([0, 1], dtype=int)
+        self.n_features_in_ = X_arr.shape[1]
+        return self
+
+    def predict_uncertainty(self, X, n_samples=None):
+        _ = n_samples  # kept for interface compatibility
+        X_arr = self._prepare_X(X)
+        x_tensor = torch.tensor(X_arr, dtype=torch.float32)
+        member_probs = []
+        with torch.no_grad():
+            for member in self.members_:
+                member.eval()
+                logits = member(x_tensor)
+                probs = torch.sigmoid(logits).cpu().numpy()
+                member_probs.append(probs)
+        prob_matrix = np.vstack(member_probs)
+        mean_prob = np.clip(np.mean(prob_matrix, axis=0), 1e-9, 1.0 - 1e-9)
+        std_prob = np.std(prob_matrix, axis=0)
+        return mean_prob, std_prob
+
+    def predict_proba(self, X):
+        mean_prob, _ = self.predict_uncertainty(X)
+        return np.column_stack([1.0 - mean_prob, mean_prob])
+
+    def predict(self, X):
+        return (self.predict_proba(X)[:, 1] >= 0.5).astype(int)
+
+
 def set_seed(seed=RANDOM_SEED):
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    pl.seed_everything(seed, workers=True)
     np.random.seed(seed)
     random.seed(seed)
 
@@ -224,19 +851,27 @@ def safe_remove_file(path):
         print(f"Warning: Could not remove stale file '{path}': {exc}")
 
 
-def resolve_data_file(filepath):
-    candidates = [
-        filepath,
-        os.path.join(os.getcwd(), filepath),
-        os.path.join(os.path.dirname(__file__), filepath),
-        os.path.join(os.path.dirname(__file__), "..", filepath),
-        os.path.join(os.path.dirname(__file__), "..", "..", filepath),
-    ]
-    for candidate in candidates:
-        if os.path.exists(candidate):
-            return os.path.abspath(candidate)
+def resolve_data_file(filepath_candidates):
+    if isinstance(filepath_candidates, (list, tuple)):
+        names = list(filepath_candidates)
+    else:
+        names = [filepath_candidates]
+
+    checked = []
+    for filepath in names:
+        candidates = [
+            filepath,
+            os.path.join(os.getcwd(), filepath),
+            os.path.join(os.path.dirname(__file__), filepath),
+            os.path.join(os.path.dirname(__file__), "..", filepath),
+            os.path.join(os.path.dirname(__file__), "..", "..", filepath),
+        ]
+        for candidate in candidates:
+            checked.append(candidate)
+            if os.path.exists(candidate):
+                return os.path.abspath(candidate)
     raise FileNotFoundError(
-        f"Could not find input dataset '{filepath}'. Checked: {candidates}"
+        f"Could not find input dataset. Checked candidates: {checked}"
     )
 
 
@@ -260,6 +895,16 @@ def load_dataset(filepath):
         raise ValueError(f"Required columns missing in dataset: {sorted(missing)}")
 
     features = [c for c in df.columns if c not in [TARGET_COL, LON_COL, LAT_COL]]
+    leakage_like = [
+        c
+        for c in features
+        if c in LEAKAGE_COLS
+        or c.lower().startswith("predicted_")
+        or c.lower() in {"uncertainty", "prediction", "pred_prob"}
+    ]
+    if leakage_like:
+        print(f"Dropping leakage-prone columns from predictors: {leakage_like}")
+        features = [c for c in features if c not in leakage_like]
     if not features:
         raise ValueError("No predictor columns found.")
 
@@ -282,6 +927,76 @@ def load_dataset(filepath):
     print("Class distribution:")
     print(y.value_counts().sort_index())
     return df, X, y, coords, features
+
+
+def review_dataset_characteristics(df, X, y, features):
+    print("\n--- Dataset Characteristics Review ---")
+    missing_counts = X.isna().sum().sort_values(ascending=False)
+    missing_df = pd.DataFrame(
+        {
+            "Feature": missing_counts.index,
+            "Missing_Count": missing_counts.values.astype(int),
+            "Missing_Rate": (missing_counts.values / len(df)),
+        }
+    )
+    missing_df.to_csv(data_output_path("dataset_missingness.csv"), index=False)
+
+    X_num = X.apply(pd.to_numeric, errors="coerce")
+    effect_sizes = (
+        ((X_num[y == 1].mean() - X_num[y == 0].mean()) / X_num.std(ddof=0).replace(0, np.nan))
+        .rename("Std_Mean_Diff")
+        .to_frame()
+        .reset_index()
+        .rename(columns={"index": "Feature"})
+    )
+    effect_sizes["Abs_Std_Mean_Diff"] = effect_sizes["Std_Mean_Diff"].abs()
+    effect_sizes = effect_sizes.sort_values("Abs_Std_Mean_Diff", ascending=False)
+    effect_sizes.to_csv(data_output_path("dataset_effect_sizes.csv"), index=False)
+
+    corr_target = (
+        X_num.corrwith(y).rename("Corr_Target").to_frame().reset_index().rename(
+            columns={"index": "Feature"}
+        )
+    )
+    corr_target["Abs_Corr_Target"] = corr_target["Corr_Target"].abs()
+    corr_target = corr_target.sort_values("Abs_Corr_Target", ascending=False)
+    corr_target.to_csv(data_output_path("dataset_target_correlations.csv"), index=False)
+
+    constraints = build_knowledge_constraints(features)
+    prior_rows = []
+    for idx, sign in constraints.items():
+        feat = features[idx]
+        corr = corr_target.loc[corr_target["Feature"] == feat, "Corr_Target"]
+        corr_val = float(corr.iloc[0]) if len(corr) else np.nan
+        prior_rows.append(
+            {
+                "Feature": feat,
+                "Expected_Direction": int(np.sign(sign)),
+                "Observed_Corr_Target": corr_val,
+                "Direction_Agreement": bool(np.sign(corr_val) == np.sign(sign))
+                if np.isfinite(corr_val)
+                else False,
+            }
+        )
+    prior_df = pd.DataFrame(prior_rows)
+    prior_df.to_csv(data_output_path("knowledge_priors_review.csv"), index=False)
+
+    stats = DatasetCharacteristics(
+        n_samples=int(len(df)),
+        n_features=int(len(features)),
+        n_positive=int(np.sum(y == 1)),
+        n_negative=int(np.sum(y == 0)),
+        positive_ratio=float(np.mean(y == 1)),
+        total_missing=int(X.isna().sum().sum()),
+        missing_rate=float(X.isna().sum().sum() / max(1, X.shape[0] * X.shape[1])),
+    )
+    with open(data_output_path("dataset_characteristics.json"), "w", encoding="utf-8") as f:
+        json.dump(stats.__dict__, f, indent=2)
+
+    print(
+        f"Samples={stats.n_samples} | Features={stats.n_features} | "
+        f"Positive ratio={stats.positive_ratio:.3f} | Missing cells={stats.total_missing}"
+    )
 
 
 def calculate_vif(X):
@@ -417,35 +1132,63 @@ def select_features_vif(X_train, threshold=VIF_THRESHOLD):
     return selected, dropped, final_vif
 
 
-def build_model_builders(seed=RANDOM_SEED, include_benchmarks=INCLUDE_BENCHMARK_MODELS):
+def build_model_builders(
+    feature_names,
+    seed=RANDOM_SEED,
+    include_benchmarks=INCLUDE_BENCHMARK_MODELS,
+):
+    constraints = build_knowledge_constraints(feature_names)
     builders = {
+        "BNN": lambda: BayesianNeuralNetworkClassifier(
+            hidden_dims=(32, 16),
+            dropout=0.28,
+            lr=9e-4,
+            weight_decay=2e-3,
+            max_epochs=DEEP_MODEL_MAX_EPOCHS,
+            patience=DEEP_MODEL_PATIENCE,
+            batch_size=DEEP_MODEL_BATCH_SIZE,
+            mc_samples=BNN_MC_SAMPLES,
+            knowledge_constraints=constraints,
+            knowledge_lambda=KNOWLEDGE_GUIDED_LAMBDA_DEEP,
+            random_state=seed,
+        ),
+        "DeepEnsemble": lambda: DeepEnsembleClassifier(
+            ensemble_size=DEEP_ENSEMBLE_MEMBERS,
+            hidden_dims=(32, 16),
+            dropout=0.18,
+            lr=9e-4,
+            weight_decay=2e-3,
+            max_epochs=DEEP_MODEL_MAX_EPOCHS,
+            patience=DEEP_MODEL_PATIENCE,
+            batch_size=DEEP_MODEL_BATCH_SIZE,
+            knowledge_constraints=constraints,
+            knowledge_lambda=KNOWLEDGE_GUIDED_LAMBDA_DEEP,
+            random_state=seed,
+        ),
         "BLR": lambda: BayesianLogisticRegression(
             prior_precision=1.5,
+            class_weight="balanced",
             max_iter=500,
             tol=1e-6,
             n_posterior_samples=500,
+            knowledge_constraints=constraints,
+            knowledge_lambda=KNOWLEDGE_GUIDED_LAMBDA_LINEAR,
             random_state=seed,
         ),
         "GPC": lambda: GaussianProcessClassifier(
             kernel=1.0 * Matern(length_scale=1.0, nu=1.5)
             + WhiteKernel(noise_level=1e-5),
             optimizer="fmin_l_bfgs_b",
-            n_restarts_optimizer=5,
+            n_restarts_optimizer=3,
             random_state=seed,
         ),
-        "LogReg_L2": lambda: LogisticRegression(
-            penalty="l2",
-            C=1.0,
-            solver="lbfgs",
-            max_iter=3000,
+        "LR": lambda: KnowledgeGuidedLogisticRegression(
+            l2_strength=1.0,
             class_weight="balanced",
-            random_state=seed,
-        ),
-        "RandomForest": lambda: RandomForestClassifier(
-            n_estimators=300,
-            min_samples_leaf=2,
-            class_weight="balanced_subsample",
-            n_jobs=-1,
+            max_iter=500,
+            tol=1e-6,
+            knowledge_constraints=constraints,
+            knowledge_lambda=KNOWLEDGE_GUIDED_LAMBDA_LINEAR,
             random_state=seed,
         ),
     }
@@ -456,7 +1199,7 @@ def build_model_builders(seed=RANDOM_SEED, include_benchmarks=INCLUDE_BENCHMARK_
 
 def cleanup_model_artifacts(active_model_names):
     active = set(active_model_names)
-    known = set(BAYESIAN_MODEL_NAMES) | set(BENCHMARK_MODEL_NAMES) | {"SVC"}
+    known = set(BAYESIAN_MODEL_NAMES) | set(BENCHMARK_MODEL_NAMES)
     for name in known.difference(active):
         cm_path = figure_output_path(f"confusion_matrix_{name.lower()}.png")
         safe_remove_file(cm_path)
@@ -628,10 +1371,11 @@ def summarize_cv_metrics(metrics_log):
 
 def plot_holdout_discrimination_curves(fitted_models, X_test, y_test):
     colors = {
+        "BNN": "#1f77b4",
+        "DeepEnsemble": "#ff7f0e",
         "BLR": "#f28e2b",
         "GPC": "#4e79a7",
-        "LogReg_L2": "#76b7b2",
-        "RandomForest": "#59a14f",
+        "LR": "#2ca02c",
     }
 
     # ROC curves from independent holdout predictions.
@@ -841,10 +1585,11 @@ def evaluate_holdout(model_builders, X_train, y_train, X_test, y_test):
 
 def plot_holdout_calibration(fitted_models, X_test, y_test):
     colors = {
+        "BNN": "#1f77b4",
+        "DeepEnsemble": "#ff7f0e",
         "BLR": "#f28e2b",
         "GPC": "#4e79a7",
-        "LogReg_L2": "#76b7b2",
-        "RandomForest": "#59a14f",
+        "LR": "#2ca02c",
     }
 
     plt.figure(figsize=(8, 7))
@@ -1332,13 +2077,16 @@ def generate_spatial_maps(model, df_full, features, shapefile_path):
     save_raster(grid_reclass, raw_class, crs, transform)
 
     if geometries:
-        for fin, fout in [
-            ("LSM_Map_Raw.tif", "LSM_Map.tif"),
-            ("Uncertainty_Map_Raw.tif", "Uncertainty_Map.tif"),
-            ("LSM_Map_Classified.tif", "LSM_Map_Reclassified.tif"),
+        for filename in [
+            "LSM_Map_Raw.tif",
+            "Uncertainty_Map_Raw.tif",
+            "LSM_Map_Classified.tif",
         ]:
-            in_path = data_output_path(fin)
-            out_path = data_output_path(fout)
+            in_path = data_output_path(filename)
+            out_path = data_output_path(f"{filename}.masked")
+            safe_remove_file(out_path)
+            safe_remove_file(out_path + ".aux.xml")
+
             with rasterio.open(in_path) as src:
                 out_image, out_transform = mask(src, geometries, crop=True)
                 out_meta = src.meta.copy()
@@ -1353,12 +2101,10 @@ def generate_spatial_maps(model, df_full, features, shapefile_path):
             )
             with rasterio.open(out_path, "w", **out_meta) as dest:
                 dest.write(out_image)
-            safe_remove_file(in_path)
+            os.replace(out_path, in_path)
 
     print("\n--- SCAI Calculation ---")
-    reclass_path = data_output_path("LSM_Map_Reclassified.tif")
-    if not os.path.exists(reclass_path):
-        reclass_path = data_output_path("LSM_Map_Classified.tif")
+    reclass_path = data_output_path("LSM_Map_Classified.tif")
 
     scai_log = []
     with rasterio.open(reclass_path) as src:
@@ -1464,6 +2210,9 @@ def save_model_report(
         "cv_splits": CV_SPLITS,
         "cv_repeats": CV_REPEATS,
         "vif_threshold": VIF_THRESHOLD,
+        "knowledge_guided_priors": KNOWLEDGE_GUIDED_PRIORS,
+        "knowledge_loss_lambda_deep": KNOWLEDGE_GUIDED_LAMBDA_DEEP,
+        "knowledge_loss_lambda_linear": KNOWLEDGE_GUIDED_LAMBDA_LINEAR,
         "train_rows": int(train_size),
         "test_rows": int(test_size),
         "selected_features": selected_features,
@@ -1474,8 +2223,9 @@ def save_model_report(
         "benchmark_models": list(BENCHMARK_MODEL_NAMES),
         "selection_policy": (
             "All models are benchmarked under identical validation. Final deployment "
-            "is restricted to Bayesian candidates (BLR, GPC) for posterior "
-            "uncertainty representation and uncertainty-aware mapping objectives."
+            "is restricted to Bayesian and uncertainty-aware candidates "
+            "(BNN, DeepEnsemble, BLR, GPC) under the same knowledge-guided "
+            "regularization policy."
         ),
         "cv_summary": cv_summary.to_dict(orient="records"),
         "holdout_metrics": holdout_metrics.to_dict(orient="records"),
@@ -1495,15 +2245,11 @@ def save_model_report(
 def main():
     set_seed()
     ensure_output_dir()
-    model_builders = build_model_builders(include_benchmarks=INCLUDE_BENCHMARK_MODELS)
-    cleanup_model_artifacts(model_builders.keys())
-    print(f"Active model scope: {list(model_builders.keys())}")
-    print(f"Bayesian deployment candidates: {list(BAYESIAN_MODEL_NAMES)}")
-    print(f"Benchmark-only models: {list(BENCHMARK_MODEL_NAMES)}")
 
-    data_file = resolve_data_file(DATA_FILE)
+    data_file = resolve_data_file(DATA_FILE_CANDIDATES)
     print(f"Using input dataset: {data_file}")
     df, X, y, coords, features = load_dataset(data_file)
+    review_dataset_characteristics(df, X, y, features)
 
     (
         X_train,
@@ -1532,6 +2278,15 @@ def main():
     )
     vif_df.to_csv(data_output_path("vif_selected_features.csv"), index=False)
     plot_vif_tolerance_curve(vif_df, threshold=VIF_THRESHOLD)
+
+    model_builders = build_model_builders(
+        selected_features,
+        include_benchmarks=INCLUDE_BENCHMARK_MODELS,
+    )
+    cleanup_model_artifacts(model_builders.keys())
+    print(f"Active model scope: {list(model_builders.keys())}")
+    print(f"Bayesian deployment candidates: {list(BAYESIAN_MODEL_NAMES)}")
+    print(f"Benchmark-only models: {list(BENCHMARK_MODEL_NAMES)}")
 
     metrics_log = cross_validation_and_modeling(
         X_train[selected_features], y_train, model_builders
@@ -1598,7 +2353,7 @@ def main():
         f"\nBest overall benchmark model by ranking (all models): {best_overall_model}"
     )
     print(
-        f"Final Bayesian deployment model (restricted to BLR/GPC): {final_model_name}"
+        f"Final deployment model (restricted to Bayesian candidates): {final_model_name}"
     )
     print(
         selection_table[

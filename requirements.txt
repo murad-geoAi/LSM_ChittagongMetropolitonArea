@@ -11,3 +11,7 @@ jenkspy>=0.3.0
 statsmodels>=0.14.0
 scikit-posthocs>=0.7.0
 shap>=0.42.0
+torch>=2.2.0
+pytorch-lightning>=2.2.0
+fsspec>=2024.2.0
+tqdm>=4.66.0

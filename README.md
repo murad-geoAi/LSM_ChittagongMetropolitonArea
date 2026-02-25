@@ -1,16 +1,23 @@
-# Bayesian LSM Pipeline with Benchmark Comparison
+# Knowledge-Guided Bayesian LSM Pipeline
 
-This repository runs a landslide susceptibility workflow that compares Bayesian and deterministic models under the same validation protocol, while restricting final map deployment to Bayesian models.
+This repository runs a landslide susceptibility workflow with a knowledge-guided loss design, standardized validation, and Bayesian-only deployment for final susceptibility/uncertainty map production.
 
 ## Model Policy
 
-- **Bayesian deployment candidates:** `BLR`, `GPC`
-- **Benchmark performance models:** `LogReg_L2`, `RandomForest`
-- All four models use the same preprocessing pipeline:
+- **Bayesian deployment candidates:** `BNN`, `DeepEnsemble`, `BLR`, `GPC`
+- **Benchmark model:** `LR`
+- Deep models (`BNN`, `DeepEnsemble`) are implemented with **PyTorch + PyTorch Lightning**.
+- Traditional models (`BLR`, `GPC`, `LR`) are implemented with sklearn-compatible estimators.
+- All models share preprocessing:
   - median imputation
   - standard scaling
   - classifier
-- Final susceptibility and uncertainty maps are generated **only** from the best Bayesian model under the weighted selection criteria.
+
+## Knowledge-Guided Loss
+
+- The pipeline uses a monotonicity-based regularizer tied to geomorphological priors.
+- Penalized directional constraints are applied to factors such as slope/elevation/precipitation (positive-risk direction) and distance-to-river/distance-to-road/NDVI (negative-risk direction).
+- Dataset diagnostics and prior-direction agreement reports are exported in `results/data/`.
 
 ## Validation Framework
 
@@ -28,8 +35,8 @@ Statistical model-comparison test:
 ## Run
 
 ```bash
-cd "h:\Baysesian Machine Learning-LSM\LSM_ChittagongMetropolitonArea"
-python __pycache__/bayesian_lsm_pipeline.py
+cd "g:\KGBNN\LSM_ChittagongMetropolitonArea"
+python src/bayesian_lsm_pipeline.py
 python src/generate_maps.py
 python src/generate_architecture_figure.py
 ```
@@ -45,18 +52,27 @@ python src/generate_architecture_figure.py
 - `holdout_calibration_summary.csv`
 - `model_selection_table.csv`
 - `friedman_test.txt`
-- `nemenyi_test_results_*.csv` (fallback timestamped file if lock prevents overwrite)
+- `nemenyi_test_results_*.csv`
 - `model_report.json`
+
+### Dataset diagnostics (`results/data/`)
+
+- `dataset_characteristics.json`
+- `dataset_missingness.csv`
+- `dataset_effect_sizes.csv`
+- `dataset_target_correlations.csv`
+- `knowledge_priors_review.csv`
 
 ### Figures (`results/figures/`)
 
 - `roc_curve.png`
 - `pr_curve.png`
 - `calibration_curve_holdout.png`
+- `confusion_matrix_bnn.png`
+- `confusion_matrix_deepensemble.png`
 - `confusion_matrix_blr.png`
 - `confusion_matrix_gpc.png`
-- `confusion_matrix_logreg_l2.png`
-- `confusion_matrix_randomforest.png`
+- `confusion_matrix_lr.png`
 - `shap_summary.png`
 - `model_architecture.png`
 - `susceptibility_map.png`
@@ -72,7 +88,7 @@ python src/generate_architecture_figure.py
 
 ## Selection Interpretation
 
-- `model_selection_table.csv` includes both benchmark and Bayesian models.
-- `Deployment_Eligible` marks Bayesian candidates only.
-- `Deployment_Selected` marks the final deployed Bayesian model.
-- If a benchmark model ranks higher overall, deployment still remains Bayesian by design to preserve posterior uncertainty representation and uncertainty-aware interpretation.
+- `model_selection_table.csv` includes all benchmarked models.
+- `Deployment_Eligible` marks Bayesian/uncertainty-aware deployment candidates only.
+- `Deployment_Selected` marks the final deployed mapping model.
+- If the deterministic benchmark ranks first overall, deployment still remains Bayesian/uncertainty-aware by design.

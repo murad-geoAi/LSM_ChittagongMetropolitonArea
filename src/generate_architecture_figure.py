@@ -380,7 +380,7 @@ draw_badge(ax, LM + 0.12, s3_y + s3_h - 0.16, "STAGE 3", C["s3_badge"])
 ax.text(
     LM + 0.92,
     s3_y + s3_h - 0.16,
-    "Bayesian Deployment + Benchmark Models",
+    "Knowledge-Guided Bayesian + Benchmark Models",
     fontsize=9,
     fontweight="bold",
     color=C["text_dark"],
@@ -391,7 +391,7 @@ ax.text(
 ax.text(
     CX,
     s3_y + s3_h - 0.45,
-    "Each model wrapped in:  Pipeline  â†’  Imputer  â†’  Scaler  â†’  Classifier",
+    "Pipeline: Imputer -> Scaler -> Model  |  Loss: BCE + lambda * monotonic knowledge regularizer",
     fontsize=6.5,
     color=C["text_light"],
     ha="center",
@@ -403,6 +403,34 @@ ax.text(
 )
 
 model_cards = [
+    {
+        "abbr": "BNN",
+        "name": "Bayesian Neural\nNetwork",
+        "type": "BAYESIAN",
+        "bg": "#ecfeff",
+        "bd": "#67e8f9",
+        "acc": "#0e7490",
+        "details": [
+            "MLP: 32 -> 16 units",
+            "MC Dropout Inference",
+            "Early Stopping",
+            "Knowledge-Guided Loss",
+        ],
+    },
+    {
+        "abbr": "DE",
+        "name": "Deep Ensemble\nNeural Network",
+        "type": "BAYESIAN",
+        "bg": "#fff7ed",
+        "bd": "#fdba74",
+        "acc": "#c2410c",
+        "details": [
+            "3 compact MLP members",
+            "Seed diversity",
+            "Ensemble variance",
+            "Knowledge-Guided Loss",
+        ],
+    },
     {
         "abbr": "BLR",
         "name": "Bayesian Logistic\nRegression",
@@ -427,42 +455,28 @@ model_cards = [
         "details": [
             "Matern (nu = 3/2) Kernel",
             "+ White Kernel",
-            "n_restarts = 5",
+            "n_restarts = 3",
             "Full Bayesian Inference",
         ],
     },
     {
-        "abbr": "LR-L2",
-        "name": "L2-Regularized\nLogistic Regression",
+        "abbr": "LR",
+        "name": "Logistic\nRegression",
         "type": "BENCHMARK",
         "bg": C["svc_bg"],
         "bd": C["svc_bd"],
         "acc": C["svc_acc"],
         "details": [
-            "Penalty = L2 (C = 1.0)",
+            "L2-regularized baseline",
             "Class Weight = balanced",
-            "Solver = lbfgs",
-            "max_iter = 3000",
-        ],
-    },
-    {
-        "abbr": "RF",
-        "name": "Random\nForest",
-        "type": "BENCHMARK",
-        "bg": C["rf_bg"],
-        "bd": C["rf_bd"],
-        "acc": C["rf_acc"],
-        "details": [
-            "n_estimators = 300",
-            "min_samples_leaf = 2",
-            "balanced_subsample",
-            "n_jobs = -1",
+            "Knowledge sign constraints",
+            "Interpretable benchmark",
         ],
     },
 ]
 
-mc_w = 2.18
-mc_gap = 0.2
+mc_w = 1.84
+mc_gap = 0.12
 mc_start_x = LM + (W - len(model_cards) * mc_w - (len(model_cards) - 1) * mc_gap) / 2
 mc_y = s3_y + 0.1
 mc_h = 1.68
@@ -503,7 +517,7 @@ for i, mc in enumerate(model_cards):
         mx + mc_w / 2,
         mc_y + mc_h - 0.55,
         mc["abbr"],
-        fontsize=16,
+        fontsize=12.5,
         fontweight="bold",
         color=mc["acc"],
         ha="center",
@@ -516,7 +530,7 @@ for i, mc in enumerate(model_cards):
         mx + mc_w / 2,
         mc_y + mc_h - 0.88,
         mc["name"],
-        fontsize=6.8,
+        fontsize=6.1,
         fontweight="bold",
         color=C["text_dark"],
         ha="center",
@@ -531,7 +545,7 @@ for i, mc in enumerate(model_cards):
             mx + mc_w / 2,
             mc_y + 0.52 - j * 0.13,
             detail,
-            fontsize=5.5,
+            fontsize=4.8,
             color=C["text_light"],
             ha="center",
             va="center",
@@ -789,7 +803,7 @@ outputs = [
         "V",
         "#b45309",
         "SCAI & Statistical\nValidation",
-        "Friedman/Nemenyi +\nBayesian deployment rule",
+        "Friedman/Nemenyi +\nknowledge-guided deployment",
     ),
 ]
 ow = 3.0
@@ -830,8 +844,8 @@ for i, (letter, lcolor, name, detail) in enumerate(outputs):
 ax.text(
     CX,
     2.4,
-    "Proposed methodological framework for Bayesian landslide susceptibility mapping.\n"
-    "All models share identical preprocessing; only Bayesian candidates are eligible for final deployment maps.",
+    "Proposed methodological framework for knowledge-guided Bayesian landslide susceptibility mapping.\n"
+    "All models share identical preprocessing; deployment is restricted to uncertainty-aware Bayesian candidates.",
     fontsize=6.2,
     color=C["text_light"],
     ha="center",

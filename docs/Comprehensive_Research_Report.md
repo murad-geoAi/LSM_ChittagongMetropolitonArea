@@ -1,99 +1,112 @@
-# Comprehensive Research Report: Bayesian Deployment with Benchmark Model Comparison
+# Comprehensive Research Report (Current Pipeline)
 
-**Case Study:** Chittagong Metropolitan Area, Bangladesh
+**Run date:** February 25, 2026  
+**Repository:** `LSM_ChittagongMetropolitonArea`
 
-## 1. Objective
+## 1. Active Pipeline Scope
 
-This workflow evaluates four models under identical validation settings:
+- Bayesian deployment candidates: `BNN`, `DeepEnsemble`, `BLR`, `GPC`
+- Deterministic benchmark: `LR`
+- Deep models implemented with PyTorch + PyTorch Lightning
+- Knowledge-guided loss enabled with monotonic directional priors
+- Final deployment restricted to Bayesian candidates only
 
-- Bayesian deployment candidates: `BLR`, `GPC`
-- Benchmark performance models: `LogReg_L2`, `RandomForest`
+## 2. Dataset Characteristics
 
-The final susceptibility and uncertainty maps are constrained to Bayesian candidates only.
+From `results/data/dataset_characteristics.json`:
 
-## 2. Method Summary
+- Total samples: `369`
+- Predictors: `14`
+- Landslide: `155`
+- Non-landslide: `214`
+- Positive ratio: `0.4201`
+- Missing predictor cells: `126` (`2.44%`)
 
-- Dataset: 369 samples (`155` landslide, `214` non-landslide)
-- Predictors: 14 conditioning factors
-- Split: stratified `80/20` train-test
-- Shared preprocessing: median imputation + standard scaling
-- Validation: repeated stratified CV (`5x3`), independent holdout, spatial block CV
+Knowledge-prior agreement summary is exported to:
+
+- `results/data/knowledge_priors_review.csv`
+
+## 3. Validation Design
+
+- Repeated stratified CV: `5 folds x 3 repeats`
+- Holdout split: `80/20`
+- Spatial block CV: `GroupKFold` over KMeans blocks
 - Metrics: Accuracy, Precision, Recall, F1, MCC, ROC-AUC, PR-AUC, Brier, LogLoss, ECE
-- Statistical test: Friedman on CV F1 with Nemenyi post-hoc when significant
+- Statistical test: Friedman on CV F1 + Nemenyi post-hoc
 
-## 3. Performance Results
+## 4. Holdout Performance
 
-### Holdout test metrics
+From `results/data/holdout_metrics.csv`:
 
 | Model | Role | Accuracy | F1 | MCC | ROC-AUC | PR-AUC | Brier | ECE |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| RandomForest | Benchmark | 0.811 | 0.774 | 0.611 | 0.866 | 0.865 | 0.153 | 0.120 |
-| GPC | Bayesian candidate | 0.743 | 0.708 | 0.481 | 0.821 | 0.814 | 0.172 | 0.084 |
-| LogReg_L2 | Benchmark | 0.703 | 0.686 | 0.420 | 0.768 | 0.667 | 0.203 | 0.110 |
-| BLR | Bayesian candidate | 0.676 | 0.625 | 0.340 | 0.775 | 0.723 | 0.193 | 0.112 |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| GPC | Bayesian | 0.743 | 0.708 | 0.481 | 0.821 | 0.814 | 0.172 | 0.084 |
+| BNN | Bayesian | 0.703 | 0.686 | 0.420 | 0.794 | 0.711 | 0.184 | 0.119 |
+| BLR | Bayesian | 0.703 | 0.686 | 0.420 | 0.773 | 0.722 | 0.201 | 0.115 |
+| LR | Benchmark | 0.703 | 0.686 | 0.420 | 0.769 | 0.668 | 0.203 | 0.110 |
+| DeepEnsemble | Bayesian | 0.703 | 0.676 | 0.411 | 0.795 | 0.714 | 0.187 | 0.129 |
 
-### Repeated CV summary
+## 5. CV and Spatial Findings
 
-| Model | Role | CV MCC (mean) | CV ROC-AUC (mean) | CV F1 (mean) |
-| --- | --- | ---: | ---: | ---: |
-| RandomForest | Benchmark | 0.498 | 0.849 | 0.711 |
-| GPC | Bayesian candidate | 0.450 | 0.836 | 0.681 |
-| LogReg_L2 | Benchmark | 0.433 | 0.756 | 0.684 |
-| BLR | Bayesian candidate | 0.388 | 0.757 | 0.631 |
+- Best CV MCC: `GPC` (`0.450`)
+- Best spatial MCC: `DeepEnsemble` (`0.355`)
+- Best spatial ROC-AUC: `GPC` (`0.769`)
 
-### Spatial CV summary
+Sources:
 
-| Model | Role | Spatial MCC (mean) | Spatial ROC-AUC (mean) |
-| --- | --- | ---: | ---: |
-| RandomForest | Benchmark | 0.323 | 0.805 |
-| GPC | Bayesian candidate | 0.259 | 0.769 |
-| BLR | Bayesian candidate | 0.226 | 0.709 |
-| LogReg_L2 | Benchmark | 0.214 | 0.709 |
+- `results/data/cv_metrics_summary.csv`
+- `results/data/spatial_cv_metrics.csv`
 
-## 4. Statistical Significance
+## 6. Statistical Significance
 
-- Friedman test on CV F1:
-  - statistic = `17.7273`
-  - p-value = `0.0005006466`
-- Nemenyi post-hoc table saved as:
-  - `results/data/nemenyi_test_results_20260224_012009.csv` (timestamped fallback due lock on legacy file)
+From `results/data/friedman_test.txt`:
 
-## 5. Model Ranking and Deployment Decision
+- Test: Friedman
+- Metric: F1
+- Statistic: `12.145985`
+- p-value: `0.0162980630` (significant at 0.05)
 
-Weighted ranking (`results/data/model_selection_table.csv`) produced:
+Nemenyi post-hoc matrix:
 
-1. RandomForest (benchmark, overall rank 1, selection score 1.15)
-2. GPC (Bayesian candidate, overall rank 2, selection score 1.95)
-3. LogReg_L2 (benchmark, overall rank 3, selection score 3.35)
-4. BLR (Bayesian candidate, overall rank 4, selection score 3.55)
+- `results/data/nemenyi_test_results.csv`
 
-Final deployment model: **GPC** (`Deployment_Selected = True`).
+## 7. Model Selection and Deployment
 
-### Justification for Bayesian deployment
+From `results/data/model_selection_table.csv`:
 
-Even though RandomForest ranks first in pure discrimination benchmarks, deployment is restricted to Bayesian candidates to preserve:
+- Overall rank 1: `GPC` (selection score `1.60`)
+- `Deployment_Selected = True` for `GPC`
+- `best_overall_model = GPC`
+- `final_model = GPC`
 
-- posterior uncertainty representation for uncertainty maps
-- probabilistic interpretability aligned with Bayesian inference
-- calibration-aware risk communication under uncertainty-focused research goals
+## 8. Spatial Products and SCAI
 
-## 6. Final Susceptibility and Uncertainty Products
-
-Generated from the final Bayesian model (**GPC**) only:
+Generated outputs:
 
 - `results/data/LSM_Map_Raw.tif`
 - `results/data/LSM_Map_Classified.tif`
 - `results/data/Uncertainty_Map_Raw.tif`
 - `results/data/LSM_Grid_Data.csv`
+- `results/data/SCAI_Analysis.csv`
 
-## 7. SCAI Plausibility
+SCAI (`Very High` class):
 
-| Tier | Area % | Landslide % | Landslide Count | SCAI |
-| --- | ---: | ---: | ---: | ---: |
-| Very Low | 29.37 | 0.65 | 1 | 45.53 |
-| Low | 23.16 | 0.65 | 1 | 35.90 |
-| Moderate | 24.04 | 5.81 | 9 | 4.14 |
-| High | 13.96 | 14.19 | 22 | 0.98 |
-| Very High | 9.47 | 78.71 | 122 | 0.12 |
+- Area: `9.466%`
+- Landslide capture: `78.710%`
+- SCAI: `0.120`
 
-The Very High class captures most observed landslides inside a limited mapped area fraction.
+## 9. Figures Generated
+
+- `results/figures/roc_curve.png`
+- `results/figures/pr_curve.png`
+- `results/figures/calibration_curve_holdout.png`
+- `results/figures/confusion_matrix_bnn.png`
+- `results/figures/confusion_matrix_deepensemble.png`
+- `results/figures/confusion_matrix_blr.png`
+- `results/figures/confusion_matrix_gpc.png`
+- `results/figures/confusion_matrix_lr.png`
+- `results/figures/shap_summary.png`
+- `results/figures/model_architecture.png`
+- `results/figures/susceptibility_map.png`
+- `results/figures/susceptibility_map_classified.png`
+- `results/figures/uncertainty_map.png`
