@@ -30,6 +30,7 @@ Statistical model-comparison test:
 ```bash
 cd "h:\Baysesian Machine Learning-LSM\LSM_ChittagongMetropolitonArea"
 python __pycache__/bayesian_lsm_pipeline.py
+python src/generate_additional_figures.py
 python src/generate_maps.py
 python src/generate_architecture_figure.py
 ```

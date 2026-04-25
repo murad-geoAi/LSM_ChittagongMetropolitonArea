@@ -11,3 +11,4 @@ jenkspy>=0.3.0
 statsmodels>=0.14.0
 scikit-posthocs>=0.7.0
 shap>=0.42.0
+python-docx>=1.2.0
