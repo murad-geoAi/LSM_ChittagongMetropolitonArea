@@ -1,0 +1,18 @@
+{
+  "raw_rows": 376,
+  "exact_duplicate_rows_removed": 7,
+  "analysis_rows": 369,
+  "positive_n": 155,
+  "negative_n": 214,
+  "negative_slope_at_least_10": 27,
+  "negative_within_500m": 71,
+  "minimum_negative_distance_m": 41.980756030762116,
+  "negative_eligible_both": 115,
+  "fractional_LULC": 31,
+  "fractional_SoilTexture": 19,
+  "training_n": 295,
+  "holdout_n": 74,
+  "training_blocks": 9,
+  "legacy_uncertainty_max_difference_from_ambiguity": 2.7755575615628914e-16,
+  "source_sha256": "405d76c05777b089e4e2d0bd1743f2b6304e9c38092c2a7f6c912168b3c4ecb1"
+}

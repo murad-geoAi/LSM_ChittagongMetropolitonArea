@@ -1,0 +1,14 @@
+{
+  "fitted_kernel": "3.44**2 * Matern(length_scale=5.09, nu=1.5) + WhiteKernel(noise_level=1e-05)",
+  "probability_tertiles": [
+    0.2511446641814814,
+    0.5959742564759077
+  ],
+  "normalized_latent_sd_tertiles": [
+    0.45206602936062906,
+    0.5353065086235312
+  ],
+  "latent_sd_normalizer": 2.415011102952043,
+  "max_quadrature_vs_sklearn_probability_difference": 0.00011801609667306395,
+  "mapping_support": "369 observed sample locations; no continuous predictor rasters supplied"
+}

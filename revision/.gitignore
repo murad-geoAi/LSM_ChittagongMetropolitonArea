@@ -1,0 +1,6 @@
+qa/
+analysis/*.joblib
+analysis/*.log
+__pycache__/
+# Local convenience archive; its individual contents are versioned below submission/.
+JMS_Revision_Package_AUTHOR_REVIEW_REQUIRED.zip

@@ -1,0 +1,17 @@
+{
+  "holdout_max_absolute_differences": {
+    "MCC": 0.0,
+    "ROC_AUC": 0.0,
+    "PR_AUC": 0.0,
+    "ECE": 1.7305601396344628e-14,
+    "Brier": 9.298117831235686e-15
+  },
+  "spatial_mcc_max_absolute_difference": 8.326672684688674e-17,
+  "shared_coordinate_rows": 0,
+  "uncertainty_variance_decomposition_passed": true,
+  "shap_background_n": 30,
+  "shap_explained_n": 74,
+  "shap_nsamples": 150,
+  "shap_link": "logit",
+  "shap_version": "0.46.0"
+}

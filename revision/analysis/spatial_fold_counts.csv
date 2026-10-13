@@ -1,0 +1,6 @@
+Fold,Clusters,Train_n,Train_positive,Train_negative,Test_n,Test_positive,Test_negative
+1,1,239,90,149,56,34,22
+2,"3,9",229,104,125,66,20,46
+3,"4,6",235,109,126,60,15,45
+4,"2,7",238,94,144,57,30,27
+5,"5,8",239,99,140,56,25,31

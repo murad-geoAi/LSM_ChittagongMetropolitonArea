@@ -1,0 +1,145 @@
+In the paper i need to give the rivisions. My supervisors message is given below
+✅ What You Have Successfully Covered (The Strengths)
+
+1. **Redefining "Data-Limited" (Editor 2 & Reviewer 1):** Your clarification that the region is rich in static spatial predictors (14 factors) but limited in "high-resolution, event-based temporal data" perfectly defends your study scope.
+
+2. **False Negative Comparison (Editor 2):** Adding the false-negative rate comparison (GPC at 25.8% vs. BLR at 35.5%) provides a highly practical, risk-informed justification for deploying the GPC model despite Random Forest's higher raw accuracy.
+
+3. **Scale Mismatch & Resampling (Reviewers 1 & 2):** Explicitly acknowledging that bilinear resampling of 5km CHIRPS and 250m SoilGrids to 30m "does not introduce additional spatial information" shows great scientific maturity and directly answers both reviewers.
+
+4. **Anthropogenic Proxies (Reviewer 1):** The new section linking LULC, NDVI, and distance to roads to physical processes like toe excavation and hill cutting provides the exact physical linkage Reviewer 1 requested.
+
+5. **Bivariate Quantile Justification (Reviewer 1):** Explaining that you used quantiles because susceptibility and uncertainty distributions are "typically right-skewed" is a bulletproof statistical defense.
+
+6. **SHAP Caveat (Reviewer 1):** Adding the disclaimer that SHAP values describe "feature importance within the predictive model, not direct physical causality" due to collinearity completely neutralizes Reviewer 1's concern.
+
+7. **Terminology Correction (Reviewer 2):** Systematically replacing "hazard" with "susceptibility" aligns perfectly with strict geomorphological definitions.
+
+8. **Critique of Prior Studies (Reviewer 1):** Pointing out that Chowdhury et al. (2023) and Biswas et al. (2026) lacked spatial independence and explicit uncertainty layers makes your literature review much stronger.
+
+---
+
+### ⚠️ What is Still Missing or Weak (Your Priority List)
+
+While the _text_ of your manuscript is now very strong, there are a few specific analytical and visual requests from **Reviewer 2** that cannot be fixed just by writing paragraphs. If you ignore these, Reviewer 2 will likely flag them in the second round.
+
+**1. The Spatial Block Map (Missing)**
+
+- **The Request:** Reviewer 2 asked for a "map showing the spatial blocks".
+
+- **Current Status:** You beautifully described the KMeans clustering (k=10, random seed=42) in the text, but you have not provided the actual map.
+
+- **Action Needed:** You MUST generate a map (using GIS or Python) showing your study area with the 369 points color-coded into their 10 spatial clusters. Add this as a Supplementary Figure or as "Figure 3" and reference it in the text.
+
+**2. ECE Bootstrap Confidence Intervals (Missing)**
+
+- **The Request:** Reviewer 2 stated that ECE is sensitive to small holdout samples and requested "bootstrap confidence intervals".
+
+- **Current Status:** You added that you used "10 equal-width bins" to mitigate variance, but you did not actually calculate or report the bootstrap confidence intervals.
+
+- **Action Needed:**
+- _Option A (Run the code):_ Bootstrapping is relatively easy in Python. Resample your holdout predictions 1,000 times, calculate ECE each time, and report the 95% confidence interval in Table 2 (e.g., ECE = 0.084 ± 0.012).
+- _Option B (Defend in Rebuttal):_ If you cannot run this, you must explicitly state in your "Response to Reviewers" document that bootstrapping was outside the computational scope of this current pipeline, but you addressed the variance concern via the 10-bin strategy.
+
+**3. Negative Sampling Sensitivity Analysis (Missing)**
+
+- **The Request:** Reviewer 2 recommended "repeated non-landslide sampling or a sensitivity analysis" to prove your random negative samples didn't skew the results.
+
+- **Current Status:** You detailed excellent strict geomorphic criteria (500m buffer, <10° slope), which heavily constrained the randomness. However, you didn't do the sensitivity run.
+
+- **Action Needed:**
+- _Option A:_ Run your model pipeline 2 or 3 more times with different random seeds for the non-landslide points and briefly mention in the text that model ranking remained completely stable.
+- _Option B:_ Defend it in the "Response to Reviewers" document by saying your strict geomorphic and spatial exclusion criteria minimized random variance so much that a full sensitivity analysis was deemed unnecessary.
+
+**4. Uncertainty Definition Distinction (Weak)**
+
+- **The Request:** Reviewer 2 asked for a "clearer distinction needed among latent variance, predictive variance on the probability scale, epistemic uncertainty, and aleatory uncertainty".
+
+- **Current Status:** You briefly mention "epistemic uncertainty" in the introduction and "latent variance" later, but you don't explicitly connect or distinguish them.
+
+- **Action Needed:** Add one or two sentences in the "Gaussian Process Classifier (GPC)" methodology section clarifying this. For example: _"In this study, the GPC's latent function variance primarily captures epistemic uncertainty (lack of knowledge due to sparse data in certain geomorphic spaces), which we normalize to a [0,1] scale to serve as our predictive uncertainty proxy."_
+
+This are the reviewr comment and this are given below
+Reviewer: 1
+
+Comments to the Author
+I recommend major revision and resubmission. The topic is meaningful, particularly because the manuscript addresses spatial validation, probability calibration, and uncertainty representation. These issues deserve greater attention in current landslide susceptibility mapping. However, the manuscript still has several important weaknesses that need to be addressed.
+The Introduction identifies spatial generalization and uncertainty quantification as two major challenges in landslide susceptibility mapping. This argument is reasonable. Although spatial autocorrelation and geographic transferability are central to the validation framework, their treatment in the literature review remains largely methodological and descriptive. In contrast, other fundamental sources of uncertainty, including landslide inventory quality, pseudo-absence selection, and mapping-unit definition, receive little attention. These issues have already been systematically reviewed by Reichenbach et al. (2018) and Merghadi et al. (2020). The authors should therefore explain more clearly how the present study advances existing knowledge, rather than broadly emphasizing the advantages of Bayesian models. In addition, the criticism of previous susceptibility studies in Bangladesh and the Chattogram region is not sufficiently specific. The manuscript states that earlier studies lacked spatial validation and uncertainty quantification, but it does not summarize their model types, data resolutions, validation strategies, or major limitations. A brief comparison paragraph should be added to clarify the main contribution of this study. For example, does the study mainly improve spatial block validation, probability calibration, Bayesian uncertainty mapping, or a combination of these aspects?
+The description of the study area is also too general and provides limited support for the proposed landslide processes. Landslides in the urban hill areas of Chattogram are closely related to monsoon rainfall, toe excavation, illegal hill cutting, urban expansion, road construction, and changes in drainage systems. Although the manuscript mentions urban expansion and hill cutting, it does not explain how these processes are represented by the selected conditioning factors. More information on regional engineering geology and human disturbance should be provided. This would strengthen the physical interpretation of factors such as distance to roads, land use and land cover, and NDVI.
+The manuscript also does not clarify whether the landslide inventory contains consistent landslide types. The 155 landslide locations collected between 2001 and 2022 may include shallow landslides, slope collapses, failures of artificially cut slopes, and rainfall-induced landslides. These processes may have different controlling mechanisms. Combining them in one susceptibility model may reduce process consistency and make the resulting map more difficult to interpret. The authors should describe the landslide types, sizes, and triggering factors included in the inventory. They should also discuss the possible effects of mixing different failure mechanisms.
+The landslide inventory is the most important data source in this study, but its construction is not described in sufficient detail. The authors combined records from the NASA Global Landslide Catalog, CEGIS, the Bangladesh Army, and published studies to obtain 155 landslide points. However, the manuscript does not explain how duplicate records were removed, how spatial location errors were handled, whether event dates were checked for consistency, how inventory completeness was assessed, or whether field verification was conducted. As noted by Reichenbach et al. (2018), inventory quality directly affects the reliability of landslide susceptibility models. The authors should therefore provide a clear workflow for inventory compilation and describe the quality-control criteria used at each step.
+The spatial resolutions of the conditioning factors differ substantially. CHIRPS rainfall data have an original resolution of approximately 5 km, SoilGrids data have a resolution of 250 m, terrain variables are derived at 30 m, and land-use data have a resolution of 10 m. All variables were resampled to 30 m. However, this procedure may create an artificial impression of spatial detail. This concern is particularly important for rainfall. Resampling or interpolating a 5 km rainfall product to 30 m does not necessarily represent local rainfall variations within a relatively small urban hill region. The authors should clearly describe the resampling methods used for each dataset. They should also assess how coarse-resolution variables affect model performance, spatial patterns, and the resulting uncertainty maps.
+The results show that the random forest model achieved the highest ROC-AUC, PR-AUC, and MCC in the holdout test, whereas the Gaussian process classifier mainly performed better in terms of expected calibration error. The authors need to explain more clearly why the GPC was selected despite its lower discrimination performance. Its MCC, F1 score, and ROC-AUC were all lower than those of the random forest model. Selecting the GPC may still be reasonable if calibrated probabilities and uncertainty estimates are the main objectives. However, this decision should be stated before the results are presented. The manuscript states that model selection is based on a weighted multi-criteria framework. However, the implementation of this framework is not internally consistent. Discrimination-related MCC metrics account for 85% of the total weight, and RF obtains the highest composite rank, yet it is subsequently excluded because final deployment is restricted to Bayesian models. The authors should clarify whether Bayesian uncertainty representation is an eligibility requirement applied before ranking or an additional criterion applied after ranking.Otherwise, the model selection may appear subjective, especially when the random forest model shows better predictive performance.
+The classification method used for the bivariate susceptibility–uncertainty map also requires further justification. The authors use quantile thresholds to divide both susceptibility and predictive variance into low, medium, and high classes. Quantile classification can produce relatively balanced spatial areas, but the resulting classes do not necessarily correspond to actual hazard levels or management thresholds. The authors should compare the current approach with alternative classification methods, such as natural breaks, fixed probability thresholds, calibration-based probability thresholds, or expert-defined thresholds. At minimum, the implications of using quantile classes should be discussed.
+SHAP can be used to describe how predictor variables contribute to model outputs, but it cannot demonstrate that geomorphological factors causally control landslide occurrence. When input variables are spatially correlated or physically coupled, SHAP importance may be affected by variable dependence and sample distribution. The authors should clearly describe the model to which SHAP was applied, the model output being explained, the background dataset or reference samples, and the method used to address correlations among variables. The interpretation should also remain cautious. SHAP results should not be presented as direct validation of physical landslide mechanisms.
+Landslides in Chattogram are often associated with short-duration intense rainfall during the monsoon season and with antecedent rainfall conditions. However, the rainfall variable used in this study appears to represent a long-term or average spatial background. Mean annual precipitation alone cannot adequately describe rainfall-triggering processes. The authors should refer to studies on rainfall thresholds, antecedent rainfall, and event-based landslide modelling. The manuscript briefly acknowledges that rainfall was represented by a climatological layer rather than event-based intensity. This limitation should be discussed in greater depth. The authors should specify the temporal aggregation period, explain why event-scale and antecedent rainfall variables were unavailable, and clarify how this choice limits process-based interpretation.
+
+Reviewer: 2
+
+Comments to the Author
+The manuscript integrates Bayesian uncertainty quantification, probability calibration, and spatial block validation into landslide susceptibility mapping, and therefore has methodological relevance and practical value. However, several important issues related to sample construction, spatial validation, the definition of uncertainty, and final model selection require further clarification. I therefore recommend major revision.
+
+The main contribution of the study appears to be the integration of existing Bayesian models, spatial validation, and bivariate mapping. The authors should more clearly identify the specific methodological advances over previous uncertainty-aware landslide susceptibility studies, rather than presenting the contribution primarily as a combination of established procedures.
+The analysis is based on only 155 landslide locations and approximately 200 randomly selected non-landslide points. However, the criteria used to identify non-landslide locations, the exclusion distance from known landslides, and the procedures used to confirm their stability are not adequately described. Repeated non-landslide sampling or a sensitivity analysis is recommended to assess the influence of random negative-sample selection on model performance and susceptibility patterns.
+The original spatial resolutions of the conditioning factors differ substantially, particularly because the 5 km rainfall data and 250 m soil data were resampled to 30 m. The manuscript should explicitly acknowledge that resampling does not increase the actual spatial information content and should discuss how this scale mismatch may affect local susceptibility patterns and estimates of variable importance.
+Spatial block validation is a central component of the study, yet several key details are missing, including the number of spatial clusters, block size, sample distribution within each fold, random seed, and a map showing the spatial blocks. These settings should be fully documented. The authors should also clarify whether the independent holdout set was spatially separated from the training samples.
+The weighted ranking indicates that Random Forest achieved the strongest overall performance, whereas GPC was selected mainly because Random Forest does not provide Bayesian posterior uncertainty. This model-selection rationale appears somewhat subjective. The authors should either state in advance that final deployment is restricted to Bayesian models or compare GPC with a probability-calibrated Random Forest to provide a stronger justification for the final choice.
+The manuscript interprets the latent-function variance from GPC directly as predictive uncertainty. A clearer distinction is needed among latent variance, predictive variance on the probability scale, epistemic uncertainty, and aleatory uncertainty. The authors should also explain how the uncertainty values were calculated, normalized, and classified into low, moderate, and high categories.
+The selection of GPC relies heavily on its lower ECE value. However, the 20% holdout sample is relatively small, and ECE is sensitive to both the number of bins and the distribution of samples among bins. The binning strategy, reliability diagrams, and bootstrap confidence intervals should be reported, and model calibration should not be judged solely from a single ECE estimate.
+The study assesses landslide susceptibility rather than hazard, because no explicit time frame, event frequency, or temporal probability is incorporated. Terms such as “hazard assessment” and “hazard hotspots” should therefore be avoided in the abstract, discussion, and conclusions. The terminology should be revised consistently to distinguish susceptibility from hazard and risk.
+
+Editor: 2
+Comments to the Author:
+
+The manuscript has high methodological novelty due to its emphasis on uncertainty quantification, model calibration (ECE), and spatial block validation—all of which are underrepresented in standard LSM studies. The application to Chattogram addresses a critical societal need in a data-scarce but high-risk urban mountain environment.
+
+However, the manuscript has significant conceptual and contextual limitations:
+
+The "Bayesian" framing is somewhat overstated if only two of four models are Bayesian.
+
+The absence of rainfall triggering data is a major gap for a mountain hazard journal.
+
+The lack of detail on landslide inventory temporal resolution, factor selection (especially anthropogenic ones), and SCAI discretization undermines the reproducibility and practical utility of the findings.
+
+The claim of "data-limited" is questionable given the 14 predictors and multiple validation strategies.
+
+The core methodological contribution is valuable, but the authors must clarify the Bayesian extent, justify factor selection, include rainfall thresholds (or explicitly state this as a limitation), provide detailed spatial validation protocols, and compare false-negative rates between models. If these issues are addressed, the paper could become a strong methodological reference for uncertainty-aware LSM in mountain cities.
+
+EEIC's comments to the author:
+
+1. The revised manuscript will be sent for second round of peer-review. Thus，the authors are suggested to make all the necessary revision and prepare a separate document to make a point-to-point response to the reviewers' comments. The reviewer response document can be uploaded to the manuscript center as Supplementary File for Review.
+2. The author list and the author sequence should be fixed before submission. Requests to add or delete authors at revision stage or after submission can only be considered after receipt of written approval from all original authors and a detailed explanation from the corresponding author about the role/deletion of the new/deleted author (s). Authorship change applications should be uploaded to the manuscript center as Supplementary File Not for Review. Authorship changes without receipt of written approval will not be allowed. Changes of authorship or in the order of authors are not accepted after acceptance of a manuscript.
+3. It is better to use red to show the revision instead of track changes.
+4. The authors are suggested to submit their revision one day before the deadline as the system expires at 12AM Beijing Time. If you need more revision time, please write to tell us to extend the deadline when you have completed the revision.
+
+---
+
+---
+
+## Revision date will be due on 28-Aug-2026
+
+---
+
+Journal of Mountain Science editorial office
+
+Institute of Mountain Hazards and Environment, Chinese Academy of Sciences
+
+Add: No.189, Qunxian South Street, Tianfu New Area, Chengdu 610299, Sichuan, China
+
+Tel:028-85252044
+E-mail: jms@imde.ac.cn
+QQ: 1540631665
+QQ Group for authors: 232951752 （Journal of Mountain Science)
+
+http://jms.imde.ac.cn
+Fulltext can be accessed at the following websites:
+http://www.springer.com/earth+sciences+and+geography/journal/11629
+http://mall.cnki.net/magazine/magadetail/SDKB201701.htm
+https://sns.wanfangdata.com.cn/sns/perio/sdkxxb-e
+https://qikan.cqvip.com/Qikan/Journal/Detail?kind=0&id=16364&from=Qikan_journal_Detail
+
+Submission: https://mc03.manuscriptcentral.com/jmsjournal
+
+About the Journal
+
+Journal of Mountain Science（JMS）is a monthly peer-reviewed scientific journal covering research on natural and anthropically -induced environmental changes and sustainable development in mountain areas. JMS was founded in 2004 and has been included in the Science Citation Index Expanded (SCI-E) since 2007. JMS is supervised by the Chinese Academy of Sciences (CAS), sponsored by Institute of Mountain Hazards and Environment, CAS, published by Science Press China, and exclusively distributed by Springer outside Mainland China. JMS focuses on reports on mountains and their surrounding lowlands - ecoregions of particular global importance.

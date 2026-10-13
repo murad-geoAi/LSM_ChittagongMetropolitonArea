@@ -1,0 +1,16 @@
+file,role,source
+Figure_1_study_area.jpeg,Main figure,Retained original illustration
+Figure_2_discrimination.pdf,Main figure,Recomputed from archived point data
+Figure_2_discrimination.png,Main figure,Recomputed from archived point data
+Figure_3_reliability.pdf,Main figure,Recomputed from archived point data
+Figure_3_reliability.png,Main figure,Recomputed from archived point data
+Figure_4_corrected_uncertainty.pdf,Main figure,Recomputed from archived point data
+Figure_4_corrected_uncertainty.png,Main figure,Recomputed from archived point data
+Figure_5_bivariate_points.pdf,Main figure,Recomputed from archived point data
+Figure_5_bivariate_points.png,Main figure,Recomputed from archived point data
+Figure_S1_spatial_clusters.pdf,Supplementary figure,Recomputed from archived point data
+Figure_S1_spatial_clusters.png,Supplementary figure,Recomputed from archived point data
+Figure_S2_validation.pdf,Supplementary figure,Recomputed from archived point data
+Figure_S2_validation.png,Supplementary figure,Recomputed from archived point data
+Figure_S3_shap.pdf,Supplementary figure,Recomputed from archived point data
+Figure_S3_shap.png,Supplementary figure,Recomputed from archived point data
